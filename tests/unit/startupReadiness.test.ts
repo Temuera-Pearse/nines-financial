@@ -37,7 +37,7 @@ describe('startup readiness', () => {
 
     expect(readiness.pendingMigrations).toEqual([])
     expect(readiness.latestAppliedMigration).toBe(
-      '003_phase_2_5_financial_authority_hardening.sql',
+      '016_phase_6_operational_hardening.sql',
     )
   })
 
@@ -65,5 +65,71 @@ describe('startup readiness', () => {
 
     expect(readiness.pendingMigrations).toEqual(['003_pending.sql'])
     expect(readiness.latestAvailableMigration).toBe('003_pending.sql')
+  })
+
+  it('fails production readiness when the deposit webhook secret is missing', async () => {
+    harness = await createTestDatabase()
+    const migrationsDirectory = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../src/migrations',
+    )
+
+    await expect(
+      getStartupReadinessReport(harness.database, migrationsDirectory, {
+        nodeEnv: 'production',
+      }),
+    ).rejects.toThrow(
+      'NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',
+    )
+  })
+
+  it('fails production readiness when the withdrawal webhook secret is missing', async () => {
+    harness = await createTestDatabase()
+    const migrationsDirectory = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../src/migrations',
+    )
+
+    await expect(
+      getStartupReadinessReport(harness.database, migrationsDirectory, {
+        nodeEnv: 'production',
+        depositProviderWebhookSecret: 'deposit-secret',
+      }),
+    ).rejects.toThrow(
+      'NINES_WITHDRAWAL_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',
+    )
+  })
+
+  it('fails readiness when the withdrawal webhook replay window is invalid', async () => {
+    harness = await createTestDatabase()
+    const migrationsDirectory = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../src/migrations',
+    )
+
+    await expect(
+      getStartupReadinessReport(harness.database, migrationsDirectory, {
+        nodeEnv: 'test',
+        withdrawalWebhookReplayWindowSeconds: 0,
+      }),
+    ).rejects.toThrow(
+      'NINES_WITHDRAWAL_WEBHOOK_REPLAY_WINDOW_SECONDS must be a positive integer',
+    )
+  })
+
+  it('allows local readiness defaults outside production mode', async () => {
+    harness = await createTestDatabase()
+    const migrationsDirectory = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../src/migrations',
+    )
+
+    const readiness = await getStartupReadinessReport(
+      harness.database,
+      migrationsDirectory,
+      { nodeEnv: 'test' },
+    )
+
+    expect(readiness.pendingMigrations).toEqual([])
   })
 })

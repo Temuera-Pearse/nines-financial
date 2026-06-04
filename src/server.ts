@@ -26,16 +26,38 @@ async function main() {
   const logger = createLogger({ service: 'nines-financial' })
   const database = new PostgresDatabase({ connectionString: env.DATABASE_URL })
 
-  await assertStartupReadiness(database, migrationsDirectory)
+  await assertStartupReadiness(database, migrationsDirectory, {
+    nodeEnv: env.NODE_ENV,
+    depositProviderWebhookSecret: env.NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET,
+    withdrawalProviderWebhookSecret:
+      env.NINES_WITHDRAWAL_PROVIDER_WEBHOOK_SECRET,
+    withdrawalWebhookReplayWindowSeconds:
+      env.NINES_WITHDRAWAL_WEBHOOK_REPLAY_WINDOW_SECONDS,
+  })
 
   const container = buildApplicationContainer({
     database,
+    depositProviderWebhookSecret: env.NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET,
+    depositWebhookReplayWindowSeconds:
+      env.NINES_DEPOSIT_WEBHOOK_REPLAY_WINDOW_SECONDS,
+    withdrawalProviderWebhookSecret:
+      env.NINES_WITHDRAWAL_PROVIDER_WEBHOOK_SECRET,
+    withdrawalWebhookReplayWindowSeconds:
+      env.NINES_WITHDRAWAL_WEBHOOK_REPLAY_WINDOW_SECONDS,
     logger,
   })
   const server = createServer(
     createApp({ ...container.services, ...container.handlers }, {
       readinessCheck: async () =>
-        getStartupReadinessReport(database, migrationsDirectory),
+        getStartupReadinessReport(database, migrationsDirectory, {
+          nodeEnv: env.NODE_ENV,
+          depositProviderWebhookSecret:
+            env.NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET,
+          withdrawalProviderWebhookSecret:
+            env.NINES_WITHDRAWAL_PROVIDER_WEBHOOK_SECRET,
+          withdrawalWebhookReplayWindowSeconds:
+            env.NINES_WITHDRAWAL_WEBHOOK_REPLAY_WINDOW_SECONDS,
+        }),
     }),
   )
 

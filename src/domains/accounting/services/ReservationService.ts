@@ -213,69 +213,84 @@ export class ReservationService {
     }
 
     return this.database.tx(async (transaction) => {
-      const idempotencyDecision = await this.idempotencyService.begin(
-        captureReservedFundsCommandType,
-        command.idempotencyKey,
-        requestPayload,
-        transaction,
-      )
-
-      if (idempotencyDecision.kind === 'replay') {
-        return this.getTransactionFromSnapshot(
-          idempotencyDecision.record.responseSnapshot,
-          transaction,
-        )
-      }
-
-      const reservationPosting = await this.requireOpenReservation(
-        command.reservationId,
-        transaction,
-      )
-      const captureTransactionType: 'bet_capture' | 'withdrawal_complete' =
-        reservationPosting.reservation.transactionType === 'bet_reserve'
-          ? 'bet_capture'
-          : 'withdrawal_complete'
-      const captureTransferCommand = {
-        transactionType: captureTransactionType,
-        referenceType: reservationPosting.reservation.referenceType,
-        referenceId: reservationPosting.reservation.referenceId,
-        relatedTransactionId: reservationPosting.reservation.transactionId,
-        debitAccountId: reservationPosting.reserveAccountId,
-        creditAccountId: command.destinationAccountId,
-        amountMinor: reservationPosting.amountMinor,
-        currency: reservationPosting.currency,
-        correlationId: correlation.correlationId,
-        causationId: correlation.causationId,
-        idempotencyKey: command.idempotencyKey,
-      }
-
-      const capturedTransaction =
-        await this.postingEngineService.postTransferWithinTransaction(
-          command.effectiveAt
-            ? {
-                ...captureTransferCommand,
-                effectiveAt: command.effectiveAt,
-              }
-            : captureTransferCommand,
-          transaction,
-        )
-
-      await this.idempotencyService.complete(
-        captureReservedFundsCommandType,
-        command.idempotencyKey,
-        requestPayload,
-        { transactionId: capturedTransaction.transactionId },
-        transaction,
-      )
-
-      this.logger.info('reservation captured', {
-        reservationId: command.reservationId,
-        transactionId: capturedTransaction.transactionId,
-        correlationId: correlation.correlationId,
-      })
-
-      return capturedTransaction
+      return this.captureFundsWithinTransaction(command, transaction)
     })
+  }
+
+  async captureFundsWithinTransaction(
+    command: CaptureReservedFundsCommand,
+    transaction: DatabaseTransaction,
+  ): Promise<LedgerTransaction> {
+    const correlation = requireCorrelationMetadata(command)
+    const requestPayload: JsonObject = {
+      reservationId: command.reservationId,
+      destinationAccountId: command.destinationAccountId,
+      effectiveAt: command.effectiveAt ?? null,
+      correlationId: correlation.correlationId,
+      causationId: correlation.causationId,
+    }
+    const idempotencyDecision = await this.idempotencyService.begin(
+      captureReservedFundsCommandType,
+      command.idempotencyKey,
+      requestPayload,
+      transaction,
+    )
+
+    if (idempotencyDecision.kind === 'replay') {
+      return this.getTransactionFromSnapshot(
+        idempotencyDecision.record.responseSnapshot,
+        transaction,
+      )
+    }
+
+    const reservationPosting = await this.requireOpenReservation(
+      command.reservationId,
+      transaction,
+    )
+    const captureTransactionType: 'bet_capture' | 'withdrawal_complete' =
+      reservationPosting.reservation.transactionType === 'bet_reserve'
+        ? 'bet_capture'
+        : 'withdrawal_complete'
+    const captureTransferCommand = {
+      transactionType: captureTransactionType,
+      referenceType: reservationPosting.reservation.referenceType,
+      referenceId: reservationPosting.reservation.referenceId,
+      relatedTransactionId: reservationPosting.reservation.transactionId,
+      debitAccountId: reservationPosting.reserveAccountId,
+      creditAccountId: command.destinationAccountId,
+      amountMinor: reservationPosting.amountMinor,
+      currency: reservationPosting.currency,
+      correlationId: correlation.correlationId,
+      causationId: correlation.causationId,
+      idempotencyKey: command.idempotencyKey,
+    }
+
+    const capturedTransaction =
+      await this.postingEngineService.postTransferWithinTransaction(
+        command.effectiveAt
+          ? {
+              ...captureTransferCommand,
+              effectiveAt: command.effectiveAt,
+            }
+          : captureTransferCommand,
+        transaction,
+      )
+
+    await this.idempotencyService.complete(
+      captureReservedFundsCommandType,
+      command.idempotencyKey,
+      requestPayload,
+      { transactionId: capturedTransaction.transactionId },
+      transaction,
+    )
+
+    this.logger.info('reservation captured', {
+      reservationId: command.reservationId,
+      transactionId: capturedTransaction.transactionId,
+      correlationId: correlation.correlationId,
+    })
+
+    return capturedTransaction
   }
 
   private async requireOpenReservation(

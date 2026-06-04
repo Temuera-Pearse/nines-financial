@@ -22,27 +22,24 @@ const contractReserveStakeCommand = {
   currency: 'USDC',
 } as const
 
+const contractPlaceBetCommand = {
+  idempotencyKey: 'phase-3-0-place-bet',
+  correlationId: 'corr_phase_3_0_place_bet',
+  causationId: 'cause_phase_3_0_place_bet',
+  userId: 'player-contract-1',
+  betId: 'bet-contract-place-1',
+  raceId: 'race-contract-place-1',
+  selectionId: 'horse-1',
+  stakeMinor: '1200',
+  currency: 'USDC',
+} as const
+
 const contractSettleBetCommand = {
   idempotencyKey: 'phase-2-8-settle-bet',
   correlationId: 'corr_phase_2_8_settle_bet',
   causationId: 'cause_phase_2_8_settle_bet',
   raceId: 'race-contract-1',
   winningSelectionId: 'horse-1',
-  acceptedBets: [
-    {
-      betId: 'bet-contract-1',
-      userId: 'player-contract-1',
-      selectionId: 'horse-1',
-      stakeMinor: '1200',
-    },
-    {
-      betId: 'bet-contract-2',
-      userId: 'player-contract-2',
-      selectionId: 'horse-2',
-      stakeMinor: '800',
-    },
-  ],
-  totalPoolMinor: '2000',
   houseTakeBps: 0,
   currency: 'USDC',
 } as const
@@ -110,6 +107,86 @@ describe('nines-back-end financial client route contract', () => {
       await harness.close()
       harness = undefined
     }
+  })
+
+  it('returns the placeBet response shape consumed by nines-back-end', async () => {
+    harness = await createTestApplication()
+    await provisionAndFundPlayer(harness)
+    await request(harness.app)
+      .post('/commands/create-race-pool')
+      .send({
+        idempotencyKey: 'phase-3-0-contract-pool',
+        correlationId: 'corr_phase_3_0_contract_pool',
+        causationId: 'cause_phase_3_0_contract_pool',
+        raceId: contractPlaceBetCommand.raceId,
+        currency: 'USDC',
+      })
+    await request(harness.app)
+      .post('/commands/register-pool-selection')
+      .send({
+        idempotencyKey: 'phase-3-0-contract-selection',
+        correlationId: 'corr_phase_3_0_contract_selection',
+        causationId: 'cause_phase_3_0_contract_selection',
+        raceId: contractPlaceBetCommand.raceId,
+        selectionId: contractPlaceBetCommand.selectionId,
+        currency: 'USDC',
+      })
+
+    const response = await request(harness.app)
+      .post('/commands/place-bet')
+      .set(
+        stateChangingHeaders(
+          contractPlaceBetCommand.idempotencyKey,
+          contractPlaceBetCommand.correlationId,
+          contractPlaceBetCommand.causationId,
+        ),
+      )
+      .send(contractPlaceBetCommand)
+    const replay = await request(harness.app)
+      .post('/commands/place-bet')
+      .set(
+        stateChangingHeaders(
+          contractPlaceBetCommand.idempotencyKey,
+          contractPlaceBetCommand.correlationId,
+          contractPlaceBetCommand.causationId,
+        ),
+      )
+      .send(contractPlaceBetCommand)
+
+    expect(response.status).toBe(201)
+    expectOnlyKeys(response.body, ['accepted', 'reservationId', 'bet'])
+    expect(response.body.accepted).toBe(true)
+    expect(response.body.reservationId).toMatch(/^txn_/)
+    expectOnlyKeys(response.body.bet, [
+      'betId',
+      'userId',
+      'raceId',
+      'selectionId',
+      'stakeMinor',
+      'currency',
+      'status',
+      'rejectionCode',
+      'rejectionReason',
+      'reservationId',
+      'acceptedAt',
+      'rejectedAt',
+      'createdAt',
+      'updatedAt',
+    ])
+    expect(response.body.bet).toMatchObject({
+      betId: contractPlaceBetCommand.betId,
+      userId: contractPlaceBetCommand.userId,
+      raceId: contractPlaceBetCommand.raceId,
+      selectionId: contractPlaceBetCommand.selectionId,
+      stakeMinor: '1200',
+      currency: 'USDC',
+      status: 'accepted',
+      rejectionCode: null,
+      rejectionReason: null,
+      rejectedAt: null,
+    })
+    expect(replay.status).toBe(201)
+    expect(replay.body).toEqual(response.body)
   })
 
   it('returns the reserveStake response shape consumed by nines-back-end', async () => {
@@ -198,17 +275,59 @@ describe('nines-back-end financial client route contract', () => {
     await provisionAndFundPlayer(harness)
     await provisionAndFundPlayer(harness, 'player-contract-2')
     await request(harness.app)
-      .post('/commands/reserve-stake')
-      .send(contractReserveStakeCommand)
+      .post('/commands/create-race-pool')
+      .send({
+        idempotencyKey: 'phase-3-1-settlement-pool',
+        correlationId: 'corr_phase_3_1_settlement_pool',
+        causationId: 'cause_phase_3_1_settlement_pool',
+        raceId: contractSettleBetCommand.raceId,
+        currency: 'USDC',
+      })
     await request(harness.app)
-      .post('/commands/reserve-stake')
+      .post('/commands/register-pool-selection')
+      .send({
+        idempotencyKey: 'phase-3-1-settlement-selection-1',
+        correlationId: 'corr_phase_3_1_settlement_selection_1',
+        causationId: 'cause_phase_3_1_settlement_selection_1',
+        raceId: contractSettleBetCommand.raceId,
+        selectionId: 'horse-1',
+        currency: 'USDC',
+      })
+    await request(harness.app)
+      .post('/commands/register-pool-selection')
+      .send({
+        idempotencyKey: 'phase-3-1-settlement-selection-2',
+        correlationId: 'corr_phase_3_1_settlement_selection_2',
+        causationId: 'cause_phase_3_1_settlement_selection_2',
+        raceId: contractSettleBetCommand.raceId,
+        selectionId: 'horse-2',
+        currency: 'USDC',
+      })
+    await request(harness.app)
+      .post('/commands/place-bet')
       .send({
         ...contractReserveStakeCommand,
-        idempotencyKey: 'phase-2-8-reserve-stake-2',
+        idempotencyKey: 'phase-3-1-settlement-place-bet-1',
+      })
+    await request(harness.app)
+      .post('/commands/place-bet')
+      .send({
+        ...contractReserveStakeCommand,
+        idempotencyKey: 'phase-3-1-settlement-place-bet-2',
         userId: 'player-contract-2',
         betId: 'bet-contract-2',
         selectionId: 'horse-2',
         stakeMinor: '800',
+      })
+    await request(harness.app)
+      .post('/commands/freeze-pool')
+      .send({
+        idempotencyKey: 'phase-3-1-settlement-freeze',
+        correlationId: 'corr_phase_3_1_settlement_freeze',
+        causationId: 'cause_phase_3_1_settlement_freeze',
+        raceId: contractSettleBetCommand.raceId,
+        currency: 'USDC',
+        reasonCode: 'race_finished',
       })
 
     const response = await request(harness.app)
@@ -234,24 +353,36 @@ describe('nines-back-end financial client route contract', () => {
 
     expect(response.status).toBe(200)
     expectOnlyKeys(response.body, [
+      'settlementRunId',
+      'status',
+      'reasonCode',
       'raceId',
       'winningSelectionId',
       'totalPoolMinor',
+      'acceptedStakeMinor',
+      'appliedCarryoverMinor',
       'houseTakeMinor',
       'netPoolMinor',
       'roundingResidualMinor',
+      'carryoverMinor',
       'settledBets',
       'settledAt',
     ])
     expect(response.body).toMatchObject({
+      status: 'completed',
+      reasonCode: null,
       raceId: contractSettleBetCommand.raceId,
       winningSelectionId: 'horse-1',
       totalPoolMinor: '2000',
+      acceptedStakeMinor: '2000',
+      appliedCarryoverMinor: '0',
       houseTakeMinor: '0',
       netPoolMinor: '2000',
       roundingResidualMinor: '0',
+      carryoverMinor: '0',
       settledAt: '2026-04-22T12:00:00.000Z',
     })
+    expect(response.body.settlementRunId).toMatch(/^settlement_run_/)
     expect(response.body.settledBets).toEqual([
       expect.objectContaining({
         betId: 'bet-contract-1',

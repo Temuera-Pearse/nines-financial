@@ -26,6 +26,15 @@ interface AccountWithBalanceRow extends AccountRow {
   balance_updated_at: Date | string
 }
 
+interface BalanceRow extends QueryResultRow {
+  account_id: string
+  balance_minor: string | number
+  normal_balance: string
+  total_debits_minor: string | number
+  total_credits_minor: string | number
+  updated_at: Date | string
+}
+
 function toDate(value: Date | string): Date {
   return value instanceof Date ? new Date(value) : new Date(value)
 }
@@ -201,36 +210,55 @@ export class PostgresAccountRepository implements AccountRepository {
 
     const placeholders = accountIds.map((_, index) => `$${index + 1}`).join(', ')
 
-    const result = await transaction.query<AccountWithBalanceRow>(
+    const accountRows = await transaction.query<AccountRow>(
       `
-        SELECT
-          a.account_id,
-          a.account_type,
-          a.account_class,
-          a.normal_balance,
-          a.owner_type,
-          a.owner_id,
-          a.currency,
-          a.status,
-          a.created_at,
-          a.updated_at,
-          COALESCE(b.balance_minor, 0) AS balance_minor,
-          COALESCE(b.normal_balance, a.normal_balance) AS balance_normal_balance,
-          COALESCE(b.total_debits_minor, 0) AS total_debits_minor,
-          COALESCE(b.total_credits_minor, 0) AS total_credits_minor,
-          COALESCE(b.updated_at, a.updated_at) AS balance_updated_at
-        FROM accounts a
-        LEFT JOIN account_balances b ON b.account_id = a.account_id
-        WHERE a.account_id IN (${placeholders})
-        ORDER BY a.account_id ASC
+        SELECT *
+        FROM accounts
+        WHERE account_id IN (${placeholders})
+        ORDER BY account_id ASC
         FOR UPDATE
       `,
       accountIds,
     )
 
-    return result.rows.map((row) => ({
-      account: toAccount(row),
-      balance: toAccountBalance(row),
-    }))
+    if (accountRows.rows.length === 0) {
+      return []
+    }
+
+    const balanceRows = await transaction.query<BalanceRow>(
+      `
+        SELECT
+          account_id,
+          balance_minor,
+          normal_balance,
+          total_debits_minor,
+          total_credits_minor,
+          updated_at
+        FROM account_balances
+        WHERE account_id IN (${placeholders})
+      `,
+      accountIds,
+    )
+    const balanceByAccountId = new Map(
+      balanceRows.rows.map((row) => [row.account_id, row]),
+    )
+
+    return accountRows.rows.map((accountRow) => {
+      const balanceRow = balanceByAccountId.get(accountRow.account_id)
+      const row: AccountWithBalanceRow = {
+        ...accountRow,
+        balance_minor: balanceRow?.balance_minor ?? 0,
+        balance_normal_balance:
+          balanceRow?.normal_balance ?? accountRow.normal_balance,
+        total_debits_minor: balanceRow?.total_debits_minor ?? 0,
+        total_credits_minor: balanceRow?.total_credits_minor ?? 0,
+        balance_updated_at: balanceRow?.updated_at ?? accountRow.updated_at,
+      }
+
+      return {
+        account: toAccount(row),
+        balance: toAccountBalance(row),
+      }
+    })
   }
 }

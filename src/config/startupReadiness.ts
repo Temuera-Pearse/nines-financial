@@ -13,10 +13,49 @@ export interface StartupReadinessReport {
   pendingMigrations: string[]
 }
 
+export interface StartupReadinessPolicyOptions {
+  nodeEnv?: string | undefined
+  depositProviderWebhookSecret?: string | undefined
+  withdrawalProviderWebhookSecret?: string | undefined
+  withdrawalWebhookReplayWindowSeconds?: number | undefined
+}
+
+function assertProviderWebhookPolicy(
+  options: StartupReadinessPolicyOptions,
+): void {
+  if (
+    options.withdrawalWebhookReplayWindowSeconds !== undefined &&
+    (!Number.isInteger(options.withdrawalWebhookReplayWindowSeconds) ||
+      options.withdrawalWebhookReplayWindowSeconds <= 0)
+  ) {
+    throw new Error(
+      'NINES_WITHDRAWAL_WEBHOOK_REPLAY_WINDOW_SECONDS must be a positive integer',
+    )
+  }
+
+  if (options.nodeEnv !== 'production') {
+    return
+  }
+
+  if (!options.depositProviderWebhookSecret?.trim()) {
+    throw new Error(
+      'NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',
+    )
+  }
+
+  if (!options.withdrawalProviderWebhookSecret?.trim()) {
+    throw new Error(
+      'NINES_WITHDRAWAL_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',
+    )
+  }
+}
+
 export async function getStartupReadinessReport(
   database: Database,
   migrationsDirectory: string,
+  options: StartupReadinessPolicyOptions = {},
 ): Promise<StartupReadinessReport> {
+  assertProviderWebhookPolicy(options)
   await database.query('SELECT 1 AS ok')
 
   const migrationFiles = (await readdir(migrationsDirectory))
@@ -51,8 +90,13 @@ export async function getStartupReadinessReport(
 export async function assertStartupReadiness(
   database: Database,
   migrationsDirectory: string,
+  options: StartupReadinessPolicyOptions = {},
 ): Promise<void> {
-  const report = await getStartupReadinessReport(database, migrationsDirectory)
+  const report = await getStartupReadinessReport(
+    database,
+    migrationsDirectory,
+    options,
+  )
 
   if (report.pendingMigrations.length > 0) {
     throw new Error(

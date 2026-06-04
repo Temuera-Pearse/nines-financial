@@ -2,13 +2,24 @@ import { Router, type Request, type RequestHandler } from 'express'
 import { ZodError } from 'zod'
 
 import type {
+  CreateRacePoolHandler,
+  FreezePoolHandler,
+  PlaceBetHandler,
+  RegisterPoolSelectionHandler,
+} from '../../domains/betting/handlers/BettingCommandHandlers.js'
+import type {
+  ApplyCarryoversToRaceHandler,
   ApplyHouseTakeHandler,
+  MarkSettlementManualReviewHandler,
   ReleaseReservationHandler,
+  ResolveSettlementManualReviewHandler,
   ReserveStakeHandler,
   SettleBetHandler,
+  VoidPoolFromManualReviewHandler,
 } from '../../domains/financial-commands/handlers/FinancialCommandHandlers.js'
 import { AppError, isAppError } from '../../shared/types/AppError.js'
 import { mirrorCorrelationHeaders } from './requestContext.js'
+import { requireAuthenticatedOperatorId } from './operatorAuth.js'
 
 type AsyncRouteHandler = RequestHandler
 
@@ -17,6 +28,14 @@ export interface FinancialCommandRouteHandlers {
   releaseReservationHandler: ReleaseReservationHandler
   settleBetHandler: SettleBetHandler
   applyHouseTakeHandler: ApplyHouseTakeHandler
+  applyCarryoversToRaceHandler: ApplyCarryoversToRaceHandler
+  markSettlementManualReviewHandler: MarkSettlementManualReviewHandler
+  resolveSettlementManualReviewHandler: ResolveSettlementManualReviewHandler
+  voidPoolFromManualReviewHandler: VoidPoolFromManualReviewHandler
+  createRacePoolHandler: CreateRacePoolHandler
+  registerPoolSelectionHandler: RegisterPoolSelectionHandler
+  freezePoolHandler: FreezePoolHandler
+  placeBetHandler: PlaceBetHandler
 }
 
 function asyncHandler(handler: AsyncRouteHandler): AsyncRouteHandler {
@@ -73,6 +92,58 @@ export function createFinancialCommandRouter(
   const router = Router()
 
   router.post(
+    '/create-race-pool',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+
+      const result = await handlers.createRacePoolHandler.handle(
+        commandPayload(request) as never,
+      )
+
+      response.status(201).json(result)
+    }),
+  )
+
+  router.post(
+    '/register-pool-selection',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+
+      const result = await handlers.registerPoolSelectionHandler.handle(
+        commandPayload(request) as never,
+      )
+
+      response.status(201).json(result)
+    }),
+  )
+
+  router.post(
+    '/freeze-pool',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+
+      const result = await handlers.freezePoolHandler.handle(
+        commandPayload(request) as never,
+      )
+
+      response.status(200).json(result)
+    }),
+  )
+
+  router.post(
+    '/place-bet',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+
+      const result = await handlers.placeBetHandler.handle(
+        commandPayload(request) as never,
+      )
+
+      response.status(result.accepted ? 201 : 200).json(result)
+    }),
+  )
+
+  router.post(
     '/reserve-stake',
     asyncHandler(async (request, response) => {
       mirrorCorrelationHeaders(request, response)
@@ -118,6 +189,61 @@ export function createFinancialCommandRouter(
 
       const result = await handlers.applyHouseTakeHandler.handle(
         commandPayload(request) as never,
+      )
+
+      response.status(200).json(result)
+    }),
+  )
+
+  router.post(
+    '/apply-carryovers-to-race',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+
+      const result = await handlers.applyCarryoversToRaceHandler.handle(
+        commandPayload(request) as never,
+      )
+
+      response.status(200).json(result)
+    }),
+  )
+
+  router.post(
+    '/mark-settlement-manual-review',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+      const operatorId = requireAuthenticatedOperatorId(request, response)
+
+      const result = await handlers.markSettlementManualReviewHandler.handle(
+        { ...commandPayload(request), operatorId } as never,
+      )
+
+      response.status(200).json(result)
+    }),
+  )
+
+  router.post(
+    '/resolve-settlement-manual-review',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+      const operatorId = requireAuthenticatedOperatorId(request, response)
+
+      const result = await handlers.resolveSettlementManualReviewHandler.handle(
+        { ...commandPayload(request), operatorId } as never,
+      )
+
+      response.status(200).json(result)
+    }),
+  )
+
+  router.post(
+    '/void-pool-from-manual-review',
+    asyncHandler(async (request, response) => {
+      mirrorCorrelationHeaders(request, response)
+      const operatorId = requireAuthenticatedOperatorId(request, response)
+
+      const result = await handlers.voidPoolFromManualReviewHandler.handle(
+        { ...commandPayload(request), operatorId } as never,
       )
 
       response.status(200).json(result)

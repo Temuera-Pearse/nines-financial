@@ -3,12 +3,18 @@ import { z } from 'zod'
 import type {
   ApplyHouseTakeCommandContract,
   ApplyHouseTakeResultContract,
+  ApplyCarryoversToRaceCommandContract,
+  ApplyCarryoversToRaceResultContract,
+  MarkSettlementManualReviewCommandContract,
   ReleaseReservationCommandContract,
   ReleaseReservationResultContract,
+  ResolveSettlementManualReviewCommandContract,
   ReserveStakeCommandContract,
   ReserveStakeResultContract,
+  SettlementRemediationResultContract,
   SettleBetCommandContract,
   SettleBetResultContract,
+  VoidPoolFromManualReviewCommandContract,
 } from '../../../contracts/financialAuthorityDtos.js'
 
 const minorUnitStringSchema = z
@@ -27,13 +33,6 @@ const commandMetadataSchema = z.object({
 
 const canonicalCurrencySchema = z.literal('USDC')
 
-const acceptedSettlementBetSchema = z.object({
-  betId: z.string().trim().min(1),
-  userId: z.string().trim().min(1),
-  selectionId: z.string().trim().min(1),
-  stakeMinor: minorUnitStringSchema,
-})
-
 export const reserveStakeCommandSchema = commandMetadataSchema.extend({
   userId: z.string().trim().min(1),
   betId: z.string().trim().min(1),
@@ -51,25 +50,6 @@ export const releaseReservationCommandSchema = commandMetadataSchema.extend({
 export const settleBetCommandSchema = commandMetadataSchema.extend({
   raceId: z.string().trim().min(1),
   winningSelectionId: z.string().trim().min(1),
-  acceptedBets: z
-    .array(acceptedSettlementBetSchema)
-    .min(1)
-    .superRefine((bets, context) => {
-      const seenBetIds = new Set<string>()
-
-      for (const [index, bet] of bets.entries()) {
-        if (seenBetIds.has(bet.betId)) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: 'accepted bets must have unique betId values',
-            path: [index, 'betId'],
-          })
-        }
-
-        seenBetIds.add(bet.betId)
-      }
-    }),
-  totalPoolMinor: minorUnitStringSchema,
   houseTakeBps: z.number().int().min(0).max(10_000),
   currency: canonicalCurrencySchema,
 })
@@ -79,6 +59,33 @@ export const applyHouseTakeCommandSchema = commandMetadataSchema.extend({
   amountMinor: minorUnitStringSchema,
   currency: canonicalCurrencySchema,
 })
+
+export const applyCarryoversToRaceCommandSchema = commandMetadataSchema.extend({
+  targetRaceId: z.string().trim().min(1),
+  currency: canonicalCurrencySchema,
+})
+
+const manualReviewBaseCommandSchema = commandMetadataSchema.extend({
+  raceId: z.string().trim().min(1),
+  currency: canonicalCurrencySchema,
+  operatorId: z.string().trim().min(1),
+  reasonText: z.string().trim().min(1).nullable().optional(),
+})
+
+export const markSettlementManualReviewCommandSchema =
+  manualReviewBaseCommandSchema.extend({
+    reasonCode: z.string().trim().min(1),
+  })
+
+export const resolveSettlementManualReviewCommandSchema =
+  manualReviewBaseCommandSchema.extend({
+    resolutionCode: z.string().trim().min(1),
+  })
+
+export const voidPoolFromManualReviewCommandSchema =
+  manualReviewBaseCommandSchema.extend({
+    reasonCode: z.string().trim().min(1),
+  })
 
 export type ReserveStakeCommandDto = z.infer<
   typeof reserveStakeCommandSchema
@@ -101,3 +108,28 @@ export type ApplyHouseTakeCommandDto = z.infer<
 > &
   ApplyHouseTakeCommandContract
 export type ApplyHouseTakeResultDto = ApplyHouseTakeResultContract
+
+export type ApplyCarryoversToRaceCommandDto = z.infer<
+  typeof applyCarryoversToRaceCommandSchema
+> &
+  ApplyCarryoversToRaceCommandContract
+export type ApplyCarryoversToRaceResultDto =
+  ApplyCarryoversToRaceResultContract
+
+export type MarkSettlementManualReviewCommandDto = z.infer<
+  typeof markSettlementManualReviewCommandSchema
+> &
+  MarkSettlementManualReviewCommandContract
+
+export type ResolveSettlementManualReviewCommandDto = z.infer<
+  typeof resolveSettlementManualReviewCommandSchema
+> &
+  ResolveSettlementManualReviewCommandContract
+
+export type VoidPoolFromManualReviewCommandDto = z.infer<
+  typeof voidPoolFromManualReviewCommandSchema
+> &
+  VoidPoolFromManualReviewCommandContract
+
+export type SettlementRemediationResultDto =
+  SettlementRemediationResultContract

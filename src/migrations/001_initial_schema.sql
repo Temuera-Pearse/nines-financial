@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS ledger_transactions (
       'settlement_payout',
       'settlement_house_take',
       'withdrawal_reserve',
+      'withdrawal_finalized',
+      'withdrawal_provider_failure_release',
       'withdrawal_complete',
       'withdrawal_reversal',
       'manual_adjustment'

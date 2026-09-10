@@ -106,6 +106,9 @@ import { createLedgerRouter } from './handlers/http/ledgerRoutes.js'
 import { createPlayerAccountsRouter } from './handlers/http/playerAccountsRoutes.js'
 import { createSystemRouter } from './handlers/http/systemRoutes.js'
 import { createWithdrawalRouter } from './handlers/http/withdrawalRoutes.js'
+import { createFundingAttestationRouter } from './handlers/http/fundingAttestationRoutes.js'
+import type { FundingAttestationService } from './domains/funding-attestations/services/FundingAttestationService.js'
+import type { Database } from './shared/db/Database.js'
 
 export interface HttpApplicationServices {
   accountService: AccountService
@@ -189,10 +192,18 @@ export interface HttpApplicationServices {
   playerFinancialTimelineHandler: PlayerFinancialTimelineHandler
   depositTimelineHandler: DepositTimelineHandler
   withdrawalTimelineHandler: WithdrawalTimelineHandler
+  fundingAttestationService: FundingAttestationService
 }
 
 export interface CreateAppOptions {
   readinessCheck?: () => Promise<StartupReadinessReport>
+  database?: Database
+  environment?: 'development' | 'test' | 'production'
+  fundingAttestationsEnabled?: boolean
+  legacyDepositProviderEnabled?: boolean
+  serviceAuthHmacSecret?: string
+  serviceAuthKeyId?: string
+  serviceAuthReplayWindowSeconds?: number
 }
 
 export function createApp(
@@ -349,8 +360,8 @@ export function createApp(
       listSelectionTotalsHandler: services.listSelectionTotalsHandler,
     }),
   )
-  app.use(
-    createDepositRouter({
+  if (options.legacyDepositProviderEnabled !== false) {
+    app.use(createDepositRouter({
       createDepositIntentHandler: services.createDepositIntentHandler,
       getDepositIntentHandler: services.getDepositIntentHandler,
       ingestProviderDepositEventHandler:
@@ -368,8 +379,20 @@ export function createApp(
       retryProviderDepositCreditHandler:
         services.retryProviderDepositCreditHandler,
       depositProviderAdapter: services.depositProviderAdapter,
-    }),
-  )
+    }))
+  }
+  if (options.fundingAttestationsEnabled) {
+    if (!options.database || !options.serviceAuthHmacSecret || !options.environment) {
+      throw new Error('Funding attestation HTTP boundary requires database, environment, and service authentication secret')
+    }
+    app.use(createFundingAttestationRouter({ database: options.database,
+      service: services.fundingAttestationService, environment: options.environment,
+      hmacSecret: options.serviceAuthHmacSecret,
+      expectedKeyId: options.serviceAuthKeyId ?? 'development-hmac-v1',
+      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
+        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
+      }) }))
+  }
   app.use(
     createWithdrawalRouter(
       {

@@ -93,6 +93,9 @@ export class PostgresOperationsRepository implements OperationsRepository {
     issue: DiscrepancyInput,
     transaction: DatabaseTransaction,
   ): Promise<MaterializedDiscrepancyResult> {
+    await transaction.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      issue.dedupeKey,
+    ])
     const existing = await transaction.query<DiscrepancyRow>(
       `
         SELECT *

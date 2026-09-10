@@ -37,7 +37,7 @@ describe('startup readiness', () => {
 
     expect(readiness.pendingMigrations).toEqual([])
     expect(readiness.latestAppliedMigration).toBe(
-      '016_phase_6_operational_hardening.sql',
+      '018_legacy_deposit_credit_exactly_once.sql',
     )
   })
 

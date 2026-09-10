@@ -11,6 +11,7 @@ import { buildApplicationContainer } from './config/serviceFactory.js'
 import { loadEnv } from './config/env.js'
 import { PostgresDatabase } from './shared/db/PostgresDatabase.js'
 import { createLogger } from './shared/observability/logger.js'
+import { SecurityEvidenceDeliveryWorker } from './shared/outbox/SecurityEvidenceDeliveryWorker.js'
 
 async function main() {
   const env = loadEnv()
@@ -37,6 +38,7 @@ async function main() {
 
   const container = buildApplicationContainer({
     database,
+    environment: env.NODE_ENV,
     depositProviderWebhookSecret: env.NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET,
     depositWebhookReplayWindowSeconds:
       env.NINES_DEPOSIT_WEBHOOK_REPLAY_WINDOW_SECONDS,
@@ -48,6 +50,15 @@ async function main() {
   })
   const server = createServer(
     createApp({ ...container.services, ...container.handlers }, {
+      database,
+      environment: env.NODE_ENV,
+      fundingAttestationsEnabled: env.NINES_API_FUNDING_ATTESTATIONS_ENABLED,
+      legacyDepositProviderEnabled: env.NINES_LEGACY_DEPOSIT_PROVIDER_ENABLED,
+      ...(env.NINES_SERVICE_AUTH_HMAC_SECRET === undefined ? {} : {
+        serviceAuthHmacSecret: env.NINES_SERVICE_AUTH_HMAC_SECRET,
+      }),
+      serviceAuthKeyId: env.NINES_SERVICE_AUTH_KEY_ID,
+      serviceAuthReplayWindowSeconds: env.NINES_SERVICE_AUTH_REPLAY_WINDOW_SECONDS,
       readinessCheck: async () =>
         getStartupReadinessReport(database, migrationsDirectory, {
           nodeEnv: env.NODE_ENV,
@@ -60,6 +71,10 @@ async function main() {
         }),
     }),
   )
+  const securityWorker = env.NINES_SECURITY_EVIDENCE_DELIVERY_ENABLED
+    ? new SecurityEvidenceDeliveryWorker(database, env.NINES_SECURITY_SERVICE_BASE_URL!,
+      env.NODE_ENV, env.NINES_SERVICE_AUTH_HMAC_SECRET!, env.NINES_SERVICE_AUTH_KEY_ID,
+      env.NINES_SERVICE_DELIVERY_POLL_INTERVAL_MS) : null
 
   server.listen(env.PORT, () => {
     process.stdout.write(
@@ -70,8 +85,10 @@ async function main() {
       }) + '\n',
     )
   })
+  securityWorker?.start()
 
   async function shutdown() {
+    await securityWorker?.stop()
     await database.close()
     server.close()
   }

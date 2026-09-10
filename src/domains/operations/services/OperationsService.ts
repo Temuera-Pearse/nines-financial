@@ -31,6 +31,7 @@ import type {
 } from '../dto/operationsDtos.js'
 import type {
   DiscrepancyInput,
+  MaterializedDiscrepancyResult,
   OperationsRepository,
 } from '../repositories/OperationsRepository.js'
 
@@ -131,13 +132,18 @@ export class OperationsService {
       })),
     ]
 
-    const results = await this.database.tx((transaction) =>
-      Promise.all(
-        issues.map((issue) =>
-          this.operationsRepository.materializeDiscrepancy(issue, transaction),
-        ),
-      ),
-    )
+    const results = await this.database.tx(async (transaction) => {
+      const materialized: MaterializedDiscrepancyResult[] = []
+      for (const issue of issues) {
+        materialized.push(
+          await this.operationsRepository.materializeDiscrepancy(
+            issue,
+            transaction,
+          ),
+        )
+      }
+      return materialized
+    })
     const discrepancies = results.map((result) => result.discrepancy)
     const bySeverity = this.countBy(discrepancies.map((item) => item.severity))
     const byStatus = this.countBy(discrepancies.map((item) => item.status))

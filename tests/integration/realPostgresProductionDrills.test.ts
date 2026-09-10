@@ -167,6 +167,45 @@ async function depositCreditCount(harness: DrillHarness) {
   return result.rows[0]?.count ?? 0
 }
 
+async function depositCreditProof(
+  harness: DrillHarness,
+  input: { economicKey: string; depositIntentId: string },
+) {
+  const result = await harness.database.query<{
+    transaction_count: number
+    debit_total: string
+    credit_total: string
+    player_balance: string
+  }>(
+    `
+      SELECT
+        (SELECT count(*)::int
+         FROM ledger_transactions
+         WHERE transaction_type = 'deposit_confirmed_credit'
+           AND idempotency_key = $1) AS transaction_count,
+        (SELECT COALESCE(sum(le.amount_minor), 0)::text
+         FROM ledger_transactions lt
+         JOIN ledger_entries le ON le.transaction_id = lt.transaction_id
+         WHERE lt.transaction_type = 'deposit_confirmed_credit'
+           AND lt.idempotency_key = $1
+           AND le.direction = 'debit') AS debit_total,
+        (SELECT COALESCE(sum(le.amount_minor), 0)::text
+         FROM ledger_transactions lt
+         JOIN ledger_entries le ON le.transaction_id = lt.transaction_id
+         WHERE lt.transaction_type = 'deposit_confirmed_credit'
+           AND lt.idempotency_key = $1
+           AND le.direction = 'credit') AS credit_total,
+        (SELECT ab.balance_minor::text
+         FROM deposit_intents di
+         JOIN player_accounts pa ON pa.player_account_id = di.player_account_id
+         JOIN account_balances ab ON ab.account_id = pa.available_account_id
+         WHERE di.deposit_intent_id = $2) AS player_balance
+    `,
+    [input.economicKey, input.depositIntentId],
+  )
+  return result.rows[0]!
+}
+
 async function fundPlayer(
   harness: DrillHarness,
   userId: string,
@@ -671,7 +710,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
       expect(await depositCreditCount(harness)).toBe(1)
     })
 
-    it('keeps operator retry credit idempotent under concurrent calls', async () => {
+    it('keeps concurrent and repeated operator retry credits economically idempotent', async () => {
       harness = await createRealPostgresTestApplication()
       const intent = await createRealPgDepositIntent(
         harness,
@@ -715,6 +754,92 @@ describe.skipIf(!realPostgresDrillsEnabled())(
         true,
       )
       expect(await depositCreditCount(harness)).toBe(1)
+
+      for (let index = 0; index < 3; index += 1) {
+        const repeated = await request(harness.app)
+          .post(
+            `/deposits/provider-events/${review.body.providerEvent.depositEventId}/retry-credit`,
+          )
+          .set(depositOperatorHeaders(`real-pg-repeated-retry-credit-${index}`))
+          .send({})
+        expect([200, 201]).toContain(repeated.status)
+        expect(repeated.body.credited).toBe(true)
+      }
+      expect(await depositCreditCount(harness)).toBe(1)
+      expect(
+        await depositCreditProof(harness, {
+          economicKey:
+            'deposit-credit-simulated-real-pg-external-tx-operator-retry',
+          depositIntentId: intent.body.depositIntentId,
+        }),
+      ).toEqual({
+        transaction_count: 1,
+        debit_total: '1000',
+        credit_total: '1000',
+        player_balance: '1000',
+      })
+    })
+
+    it('rolls back an interrupted operator retry and permits one later credit', async () => {
+      harness = await createRealPostgresTestApplication({
+        faultInjector: new OneShotFaultInjector(
+          'deposit.after_ledger_posting_before_state_finalization',
+        ),
+      })
+      const intent = await createRealPgDepositIntent(
+        harness,
+        'real-pg-deposit-player-operator-rollback',
+        'real-pg-deposit-intent-operator-rollback',
+      )
+      const review = await request(harness.app)
+        .post('/provider-events/deposits')
+        .set(depositOperatorHeaders('real-pg-review-event-operator-rollback'))
+        .send({
+          providerEventId: 'real-pg-provider-event-operator-rollback',
+          provider: 'simulated',
+          externalTransactionId: 'real-pg-external-tx-operator-rollback',
+          destinationReference: 'real-pg-unknown-operator-rollback',
+          amountMinor: '1000',
+          currency: 'USDC',
+          confirmed: true,
+        })
+      await request(harness.app)
+        .post(
+          `/deposits/provider-events/${review.body.providerEvent.depositEventId}/link-intent`,
+        )
+        .set(depositOperatorHeaders('real-pg-link-operator-rollback'))
+        .send({ depositIntentId: intent.body.depositIntentId })
+
+      const interrupted = await request(harness.app)
+        .post(
+          `/deposits/provider-events/${review.body.providerEvent.depositEventId}/retry-credit`,
+        )
+        .set(depositOperatorHeaders('real-pg-retry-credit-interrupted'))
+        .send({})
+      expect(interrupted.status).toBe(500)
+      expect(interrupted.body.error.code).toBe('SIMULATED_PROCESS_INTERRUPT')
+      expect(await depositCreditCount(harness)).toBe(0)
+
+      const retry = await request(harness.app)
+        .post(
+          `/deposits/provider-events/${review.body.providerEvent.depositEventId}/retry-credit`,
+        )
+        .set(depositOperatorHeaders('real-pg-retry-credit-after-rollback'))
+        .send({})
+      expect(retry.status).toBe(201)
+      expect(retry.body.credited).toBe(true)
+      expect(
+        await depositCreditProof(harness, {
+          economicKey:
+            'deposit-credit-simulated-real-pg-external-tx-operator-rollback',
+          depositIntentId: intent.body.depositIntentId,
+        }),
+      ).toEqual({
+        transaction_count: 1,
+        debit_total: '1000',
+        credit_total: '1000',
+        player_balance: '1000',
+      })
     })
 
     it('reserves one withdrawal under concurrent duplicate create requests', async () => {
@@ -1092,14 +1217,6 @@ describe.skipIf(!realPostgresDrillsEnabled())(
           ),
         )
         .send({ submissionNote: 'Submit before reconciliation drill' })
-      await harness.database.query(
-        `
-          UPDATE withdrawal_requests
-          SET updated_at = '2026-04-22T10:00:00.000Z'
-          WHERE withdrawal_request_id = $1
-        `,
-        [created.body.withdrawalRequestId],
-      )
       const stuckSubmitting = await createRealPgWithdrawal(
         harness,
         'real-pg-withdrawal-player-reconcile',
@@ -1118,6 +1235,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
         `
           UPDATE withdrawal_requests
           SET status = 'submitting',
+              created_at = '2026-04-22T10:00:00.000Z',
               updated_at = '2026-04-22T10:00:00.000Z'
           WHERE withdrawal_request_id = $1
         `,
@@ -1430,9 +1548,26 @@ describe.skipIf(!realPostgresDrillsEnabled())(
       )
 
       expectSafeConcurrentStatuses(responses)
+      expect(responses.every((response) => response.status === 201)).toBe(true)
       expect(
-        responses.some((response) => response.body.reconciliation.openedCount >= 1),
-      ).toBe(true)
+        responses.filter(
+          (response) => response.body.reconciliation.openedCount >= 1,
+        ),
+      ).toHaveLength(1)
+      expect(
+        await operationalDiscrepancyCount(
+          harness,
+          'withdrawal.requested_without_reservation',
+        ),
+      ).toBe(1)
+
+      const followUp = await request(harness.app)
+        .post('/admin/operations/reconciliation/run')
+        .set(operationsOperatorHeaders('real-pg-ops-reconcile-follow-up'))
+        .send({})
+      expect(followUp.status).toBe(201)
+      expect(followUp.body.reconciliation.openedCount).toBe(0)
+      expect(followUp.body.reconciliation.refreshedCount).toBeGreaterThanOrEqual(1)
       expect(
         await operationalDiscrepancyCount(
           harness,

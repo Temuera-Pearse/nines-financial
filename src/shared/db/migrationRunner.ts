@@ -8,6 +8,7 @@ interface AppliedMigrationRow extends QueryResultRow {
 }
 
 export interface SqlMigrationRunnerOptions {
+  transformMigrationSql?: (sql: string, fileName: string) => string
   beforeMigration?: (
     transaction: DatabaseTransaction,
     fileName: string,
@@ -42,7 +43,8 @@ export async function runSqlMigrations(
       continue
     }
 
-    const sql = await readFile(path.join(migrationsDirectory, fileName), 'utf8')
+    const sourceSql = await readFile(path.join(migrationsDirectory, fileName), 'utf8')
+    const sql = options.transformMigrationSql?.(sourceSql, fileName) ?? sourceSql
     const startedAt = Date.now()
 
     options.onMigrationStart?.(fileName)

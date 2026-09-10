@@ -37,6 +37,8 @@ truth.
 - outbox scaffolding for durable financial events
 - internal HTTP handlers for account, reservation, readiness, and maintenance workflows
 - tests for ledger and idempotency invariants
+- authenticated API funding-attestation consumption, exact scale-6
+  USDC-to-NINES issuance, and a durable Security evidence outbox
 
 ## Hard invariants
 
@@ -47,6 +49,24 @@ truth.
 - reservations may be resolved once only
 - `account_balances` is a derived read model and must stay reconcilable from ledger entries
 - idempotency keys are command-scoped and persisted with posted ledger transactions for audit traceability
+- NINES is a separate scale-6 currency; token purchase debits
+  `token_purchase_clearing` and credits the player's NINES `user_available`
+  account exactly once
+- accepted consumption and its ledger posting are atomically and
+  bidirectionally coupled by deferred PostgreSQL constraint triggers
+- committed ledger transactions and entries are append-only; corrections use
+  new compensating transactions
+- `(provider, paymentReference)` is the economic external-source identity and
+  is unique independently of confirmation-event evidence
+
+## API funding boundary
+
+`POST /internal/v1/funding-attestations` accepts authenticated `nines-api` v1
+attestations. Financial validates scale-6 USDC, provisions a NINES account,
+rechecks local account controls, and owns conversion and posting under
+`usdc-to-nines-par-v1`. Attestations past `automaticProcessingUntil` become
+`review_required` without ledger movement. The legacy provider lifecycle is
+test/nonproduction-only and cannot run beside this path in production.
 
 ## Ownership boundaries
 

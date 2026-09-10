@@ -1,5 +1,5 @@
 import type { Logger } from '../../src/shared/observability/logger.js'
-import { FixedClock } from '../../src/shared/time/Clock.js'
+import { FixedClock, type Clock } from '../../src/shared/time/Clock.js'
 import type { FaultInjector } from '../../src/shared/faults/FaultInjector.js'
 import { createApp } from '../../src/app.js'
 import {
@@ -28,12 +28,13 @@ export async function createTestApplication(
   now: Date = new Date('2026-04-22T12:00:00.000Z'),
   options: {
     faultInjector?: FaultInjector
+    clock?: Clock
   } = {},
 ): Promise<TestApplicationHarness> {
   const databaseHarness = await createTestDatabase()
   const container = buildApplicationContainer({
     database: databaseHarness.database,
-    clock: new FixedClock(now),
+    clock: options.clock ?? new FixedClock(now),
     faultInjector: options.faultInjector,
     depositProviderWebhookSecret: 'test-deposit-webhook-secret',
     withdrawalProviderWebhookSecret: 'test-withdrawal-webhook-secret',
@@ -47,9 +48,9 @@ export async function createTestApplication(
       readinessCheck: async () => ({
         checkedAt: now,
         latestAvailableMigration:
-          '016_phase_6_operational_hardening.sql',
+          '018_legacy_deposit_credit_exactly_once.sql',
         latestAppliedMigration:
-          '016_phase_6_operational_hardening.sql',
+          '018_legacy_deposit_credit_exactly_once.sql',
         pendingMigrations: [],
       }),
     }),

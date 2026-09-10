@@ -107,9 +107,9 @@ function buildHarnessForDatabase(
       readinessCheck: async () => ({
         checkedAt: clock.now(),
         latestAvailableMigration:
-          '016_phase_6_operational_hardening.sql',
+          '018_legacy_deposit_credit_exactly_once.sql',
         latestAppliedMigration:
-          '016_phase_6_operational_hardening.sql',
+          '018_legacy_deposit_credit_exactly_once.sql',
         pendingMigrations: [],
       }),
     }),

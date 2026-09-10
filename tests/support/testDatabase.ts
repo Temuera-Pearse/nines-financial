@@ -81,6 +81,20 @@ class PgMemDatabase implements Database {
 
 function registerTestFunctions(memoryDatabase: IMemoryDb): void {
   memoryDatabase.public.registerFunction({
+    name: 'hashtext', args: [DataType.text], returns: DataType.integer,
+    implementation: (value: string) => [...value].reduce((hash, char) => ((hash * 31) + char.charCodeAt(0)) | 0, 0),
+  })
+  memoryDatabase.public.registerFunction({
+    name: 'pg_advisory_xact_lock', args: [DataType.integer], returns: DataType.integer,
+    implementation: () => 1,
+  })
+  memoryDatabase.public.registerFunction({
+    name: 'jsonb_typeof',
+    args: [DataType.jsonb],
+    returns: DataType.text,
+    implementation: (value: unknown) => Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
+  })
+  memoryDatabase.public.registerFunction({
     name: 'char_length',
     args: [DataType.text],
     returns: DataType.integer,
@@ -130,7 +144,21 @@ export async function createTestDatabase(): Promise<TestDatabaseHarness> {
     '../../src/migrations',
   )
 
-  await runSqlMigrations(database, migrationsDirectory)
+  await runSqlMigrations(database, migrationsDirectory, {
+    // pg-mem does not implement PostgreSQL trigger DDL or PL/pgSQL DO blocks.
+    // Real PostgreSQL runs both migrations without these test-only transforms.
+    transformMigrationSql: (sql, fileName) => {
+      if (fileName === '017_phase_7_token_purchase_attestations.sql') {
+        return sql
+          .replace(/([a-z_]+) ~ '\^\[0-9a-f\]\{64\}\$'/gu, 'char_length($1) = 64')
+          .replace(/CREATE OR REPLACE FUNCTION protect_funding_attestation_consumption\(\)[\s\S]*$/u, '')
+      }
+      if (fileName === '018_legacy_deposit_credit_exactly_once.sql') {
+        return sql.replace(/DO \$\$[\s\S]*?\$\$;\s*/u, '')
+      }
+      return sql
+    },
+  })
 
   return {
     memoryDatabase,

@@ -127,6 +127,8 @@ import {
 } from '../domains/operations/handlers/OperationsHandlers.js'
 import { PostgresOperationsRepository } from '../domains/operations/repositories/postgres/PostgresOperationsRepository.js'
 import { OperationsService } from '../domains/operations/services/OperationsService.js'
+import { FundingAttestationRepository } from '../domains/funding-attestations/repositories/FundingAttestationRepository.js'
+import { FundingAttestationService } from '../domains/funding-attestations/services/FundingAttestationService.js'
 
 export interface ApplicationContainer {
   repositories: {
@@ -143,6 +145,7 @@ export interface ApplicationContainer {
     depositRepository: PostgresDepositRepository
     withdrawalRepository: PostgresWithdrawalRepository
     operationsRepository: PostgresOperationsRepository
+    fundingAttestationRepository: FundingAttestationRepository
     depositProviderAdapter: DepositProviderAdapter
     withdrawalProviderAdapter: WithdrawalProviderAdapter
   }
@@ -160,6 +163,7 @@ export interface ApplicationContainer {
     depositService: DepositService
     withdrawalService: WithdrawalService
     operationsService: OperationsService
+    fundingAttestationService: FundingAttestationService
     depositProviderAdapter: DepositProviderAdapter
     withdrawalProviderAdapter: WithdrawalProviderAdapter
   }
@@ -252,6 +256,7 @@ export interface BuildApplicationContainerOptions {
   depositProviderAdapter?: DepositProviderAdapter | undefined
   withdrawalProviderAdapter?: WithdrawalProviderAdapter | undefined
   logger?: Logger
+  environment?: 'development' | 'test' | 'production'
 }
 
 export function buildApplicationContainer(
@@ -300,6 +305,7 @@ export function buildApplicationContainer(
     options.database,
   )
   const operationsRepository = new PostgresOperationsRepository(options.database)
+  const fundingAttestationRepository = new FundingAttestationRepository(options.database)
   const idempotencyService = new IdempotencyService(
     idempotencyRepository,
     clock,
@@ -468,6 +474,17 @@ export function buildApplicationContainer(
     accountControlService,
     clock,
   )
+  const fundingAttestationService = new FundingAttestationService(
+    options.database,
+    fundingAttestationRepository,
+    playerAccountProvisioningService,
+    accountRepository,
+    postingEngineService,
+    effectiveStatusService,
+    accountActionAuthorizationService,
+    clock,
+    options.environment ?? 'test',
+  )
   const reserveStakeHandler = new ReserveStakeHandler(financialCommandService)
   const releaseReservationHandler = new ReleaseReservationHandler(
     financialCommandService,
@@ -616,6 +633,7 @@ export function buildApplicationContainer(
       depositRepository,
       withdrawalRepository,
       operationsRepository,
+      fundingAttestationRepository,
       depositProviderAdapter,
       withdrawalProviderAdapter,
     },
@@ -633,6 +651,7 @@ export function buildApplicationContainer(
       depositService,
       withdrawalService,
       operationsService,
+      fundingAttestationService,
       depositProviderAdapter,
       withdrawalProviderAdapter,
     },

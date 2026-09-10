@@ -164,6 +164,7 @@ export class AdminOpsReadService {
           WHERE a.currency = $1
             AND a.account_type IN (
               'deposit_clearing',
+              'token_purchase_clearing',
               'treasury_cash',
               'settlement_clearing',
               'withdrawal_clearing',

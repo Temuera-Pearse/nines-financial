@@ -5,6 +5,7 @@ export const accountTypes = [
   'user_locked',
   'user_withdrawal_reserved',
   'deposit_clearing',
+  'token_purchase_clearing',
   'treasury_cash',
   'house_take_revenue',
   'house_rounding_residual',
@@ -49,6 +50,7 @@ export type LedgerTransactionStatus = (typeof ledgerTransactionStatuses)[number]
 export const transactionTypes = [
   'deposit_pending_credit',
   'deposit_confirmed_credit',
+  'token_purchase_issuance',
   'bet_reserve',
   'bet_release',
   'bet_capture',
@@ -69,6 +71,7 @@ export type TransactionType = (typeof transactionTypes)[number]
 export const referenceTypes = [
   'account',
   'deposit',
+  'funding_attestation',
   'withdrawal',
   'bet',
   'reservation',
@@ -88,6 +91,7 @@ const accountPostingPolicies: Record<AccountType, AccountPostingPolicy> = {
   user_locked: { allowNegativeBalance: false },
   user_withdrawal_reserved: { allowNegativeBalance: false },
   deposit_clearing: { allowNegativeBalance: true },
+  token_purchase_clearing: { allowNegativeBalance: true },
   treasury_cash: { allowNegativeBalance: true },
   house_take_revenue: { allowNegativeBalance: true },
   house_rounding_residual: { allowNegativeBalance: true },
@@ -107,6 +111,7 @@ const accountTypeClassifications: Record<AccountType, AccountTypeClassification>
   user_locked: { accountClass: 'liability', normalBalance: 'credit' },
   user_withdrawal_reserved: { accountClass: 'liability', normalBalance: 'credit' },
   deposit_clearing: { accountClass: 'asset', normalBalance: 'debit' },
+  token_purchase_clearing: { accountClass: 'asset', normalBalance: 'debit' },
   treasury_cash: { accountClass: 'asset', normalBalance: 'debit' },
   house_take_revenue: { accountClass: 'revenue', normalBalance: 'credit' },
   house_rounding_residual: { accountClass: 'revenue', normalBalance: 'credit' },
@@ -123,6 +128,7 @@ export interface TransactionTypePolicy {
 const transactionTypePolicies: Record<TransactionType, TransactionTypePolicy> = {
   deposit_pending_credit: { adminOnly: false },
   deposit_confirmed_credit: { adminOnly: false },
+  token_purchase_issuance: { adminOnly: false },
   bet_reserve: { adminOnly: false },
   bet_release: { adminOnly: false },
   bet_capture: { adminOnly: false },

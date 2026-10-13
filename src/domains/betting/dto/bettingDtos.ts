@@ -22,7 +22,7 @@ const commandMetadataSchema = z.object({
   causationId: z.string().trim().min(1),
 })
 
-const canonicalCurrencySchema = z.literal('USDC')
+const canonicalCurrencySchema = z.literal('NINES')
 
 const optionalIsoTimestampSchema = z
   .string()

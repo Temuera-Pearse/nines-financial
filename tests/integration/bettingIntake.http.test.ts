@@ -14,14 +14,15 @@ async function provisionPlayerAccount(
   harness: TestApplicationHarness,
   userId: string,
   key: string,
+  currency: 'NINES' | 'USDC' = 'NINES',
 ) {
   return harness.container.services.playerAccountProvisioningService.provisionIfNeeded(
     {
-      idempotencyKey: toIdempotencyKey(`provision-${key}`),
+      idempotencyKey: toIdempotencyKey(`provision-${key}-${currency}`),
       userId: toUserId(userId),
-      currency: 'USDC',
-      correlationId: `corr_provision_${key}`,
-      causationId: `cause_provision_${key}`,
+      currency,
+      correlationId: `corr_provision_${key}_${currency}`,
+      causationId: `cause_provision_${key}_${currency}`,
     },
   )
 }
@@ -30,32 +31,38 @@ async function fundPlayer(
   harness: TestApplicationHarness,
   userId: string,
   amountMinor = '5000',
+  currency: 'NINES' | 'USDC' = 'NINES',
 ) {
   const playerAccount = await provisionPlayerAccount(
     harness,
     userId,
     `fund-${userId}`,
+    currency,
   )
   const depositSource =
     await harness.container.services.accountService.createAccount({
       accountType: 'deposit_clearing',
       ownerType: 'platform',
-      ownerId: toOwnerId(`betting-deposit-source-${userId}`),
-      currency: 'USDC',
+      ownerId: toOwnerId(`betting-deposit-source-${userId}-${currency}`),
+      currency,
       correlationId: `corr_deposit_source_${userId}`,
       causationId: `cause_deposit_source_${userId}`,
-      idempotencyKey: toIdempotencyKey(`betting-deposit-source-${userId}`),
+      idempotencyKey: toIdempotencyKey(
+        `betting-deposit-source-${userId}-${currency}`,
+      ),
     })
 
   await harness.container.services.postingEngineService.postTransfer({
-    idempotencyKey: toIdempotencyKey(`betting-fund-player-${userId}`),
+    idempotencyKey: toIdempotencyKey(
+      `betting-fund-player-${userId}-${currency}`,
+    ),
     transactionType: 'deposit_confirmed_credit',
     referenceType: 'deposit',
     referenceId: `betting-deposit-${userId}`,
     debitAccountId: depositSource.accountId,
     creditAccountId: playerAccount.availableAccountId,
     amountMinor,
-    currency: 'USDC',
+    currency,
     correlationId: `corr_fund_${userId}`,
     causationId: `cause_fund_${userId}`,
   })
@@ -69,7 +76,7 @@ function poolBody(overrides: Record<string, unknown> = {}) {
     correlationId: 'corr_pool',
     causationId: 'cause_pool',
     raceId: 'race-1',
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -81,7 +88,7 @@ function selectionBody(overrides: Record<string, unknown> = {}) {
     causationId: 'cause_selection',
     raceId: 'race-1',
     selectionId: 'horse-1',
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -96,7 +103,7 @@ function betBody(overrides: Record<string, unknown> = {}) {
     raceId: 'race-1',
     selectionId: 'horse-1',
     stakeMinor: '1200',
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -163,12 +170,85 @@ describe('betting intake HTTP routes', () => {
     expect(response.status).toBe(201)
     expect(response.body).toMatchObject({
       raceId: 'race-1',
-      currency: 'USDC',
+      currency: 'NINES',
       status: 'open',
       bettingOpensAt: null,
       bettingClosesAt: null,
       frozenAt: null,
     })
+  })
+
+  it('keeps historical USDC pools readable while new pools use NINES', async () => {
+    harness = await createTestApplication()
+    const timestamp = new Date('2026-04-22T11:00:00.000Z')
+
+    await harness.database.query(
+      `
+        INSERT INTO race_pools (
+          race_id, currency, status, betting_opens_at, betting_closes_at,
+          created_at, updated_at, frozen_at
+        ) VALUES ($1, 'USDC', 'open', NULL, NULL, $2, $2, NULL)
+      `,
+      ['race-coexistence', timestamp],
+    )
+
+    const historical =
+      await harness.container.repositories.bettingRepository.getRacePool(
+        'race-coexistence',
+        'USDC',
+      )
+    const created = await request(harness.app)
+      .post('/commands/create-race-pool')
+      .send(
+        poolBody({
+          raceId: 'race-coexistence',
+          idempotencyKey: 'pool-coexistence-nines',
+        }),
+      )
+    await request(harness.app)
+      .post('/commands/register-pool-selection')
+      .send(
+        selectionBody({
+          raceId: 'race-coexistence',
+          selectionId: 'horse-nines-only',
+          idempotencyKey: 'selection-coexistence-nines',
+        }),
+      )
+    const activePool = await request(harness.app).get(
+      '/races/race-coexistence/pool',
+    )
+
+    expect(historical).toMatchObject({
+      raceId: 'race-coexistence',
+      currency: 'USDC',
+    })
+    expect(created.status).toBe(201)
+    expect(created.body.currency).toBe('NINES')
+    expect(activePool.body).toMatchObject({
+      pool: { raceId: 'race-coexistence', currency: 'NINES' },
+      selections: [
+        {
+          raceId: 'race-coexistence',
+          selectionId: 'horse-nines-only',
+          currency: 'NINES',
+          status: 'active',
+          displayName: null,
+          createdAt: expect.any(String),
+          updatedAt: expect.any(String),
+        },
+      ],
+    })
+    await expect(
+      harness.database.query(
+        `
+          INSERT INTO race_pools (
+            race_id, currency, status, betting_opens_at, betting_closes_at,
+            created_at, updated_at, frozen_at
+          ) VALUES ($1, 'EUR', 'open', NULL, NULL, $2, $2, NULL)
+        `,
+        ['race-unsupported-currency', timestamp],
+      ),
+    ).rejects.toThrow()
   })
 
   it('safely ignores duplicate race pool creation with matching business identity', async () => {
@@ -213,7 +293,7 @@ describe('betting intake HTTP routes', () => {
     expect(response.body).toMatchObject({
       raceId: 'race-1',
       selectionId: 'horse-1',
-      currency: 'USDC',
+      currency: 'NINES',
       status: 'active',
     })
   })
@@ -261,7 +341,7 @@ describe('betting intake HTTP routes', () => {
         correlationId: 'corr_freeze',
         causationId: 'cause_freeze',
         raceId: 'race-1',
-        currency: 'USDC',
+        currency: 'NINES',
         reasonCode: 'race_started',
       })
     const bet = await placeBet(harness)
@@ -293,7 +373,7 @@ describe('betting intake HTTP routes', () => {
         correlationId: 'corr_freeze',
         causationId: 'cause_freeze',
         raceId: 'race-1',
-        currency: 'USDC',
+        currency: 'NINES',
         reasonCode: 'race_started',
       })
     const duplicate = await request(harness.app)
@@ -303,7 +383,7 @@ describe('betting intake HTTP routes', () => {
         correlationId: 'corr_freeze_duplicate',
         causationId: 'cause_freeze_duplicate',
         raceId: 'race-1',
-        currency: 'USDC',
+        currency: 'NINES',
         reasonCode: 'race_started',
       })
     const auditCount = await harness.database.query<{ count: number }>(
@@ -330,7 +410,7 @@ describe('betting intake HTTP routes', () => {
     expect(response.status).toBe(200)
     expect(response.body.pool).toMatchObject({
       raceId: 'race-1',
-      currency: 'USDC',
+      currency: 'NINES',
       status: 'open',
     })
     expect(response.body.selections).toEqual([
@@ -349,7 +429,7 @@ describe('betting intake HTTP routes', () => {
 
     const response = await placeBet(harness)
     const balance = await request(harness.app).get(
-      '/player/accounts/player-1/USDC/balance',
+      '/player/accounts/player-1/NINES/balance',
     )
     const ledgerCount = await harness.database.query<{ count: number }>(
       `
@@ -370,13 +450,38 @@ describe('betting intake HTTP routes', () => {
       raceId: 'race-1',
       selectionId: 'horse-1',
       stakeMinor: '1200',
-      currency: 'USDC',
+      currency: 'NINES',
       status: 'accepted',
       rejectionCode: null,
     })
     expect(ledgerCount.rows[0]?.count).toBe(1)
     expect(balance.body.spendableBalanceMinor).toBe('3800')
     expect(balance.body.lockedBalanceMinor).toBe('1200')
+  })
+
+  it('does not use a funded USDC account for a new NINES wager', async () => {
+    harness = await createTestApplication()
+    await openPoolWithSelection(harness)
+    await fundPlayer(harness, 'player-1', '5000', 'USDC')
+
+    const response = await placeBet(harness)
+    const usdcBalance = await request(harness.app).get(
+      '/player/accounts/player-1/USDC/balance',
+    )
+    const ninesBalance = await request(harness.app).get(
+      '/player/accounts/player-1/NINES/balance',
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      accepted: false,
+      bet: {
+        currency: 'NINES',
+        rejectionCode: 'INSUFFICIENT_FUNDS',
+      },
+    })
+    expect(usdcBalance.body.spendableBalanceMinor).toBe('5000')
+    expect(ninesBalance.body.spendableBalanceMinor).toBe('0')
   })
 
   it('rejects missing pool without ledger effect', async () => {
@@ -426,7 +531,7 @@ describe('betting intake HTTP routes', () => {
     expect(ledgerCount.rows[0]?.count).toBe(0)
   })
 
-  it('rejects invalid stakeMinor and non-USDC at the command boundary', async () => {
+  it('rejects invalid stakeMinor and non-NINES at the command boundary', async () => {
     harness = await createTestApplication()
 
     const invalidStake = await placeBet(harness, { stakeMinor: '12.00' })
@@ -516,7 +621,7 @@ describe('betting intake HTTP routes', () => {
       (body) => body.accepted === false,
     )
     const balance = await request(harness.app).get(
-      '/player/accounts/player-1/USDC/balance',
+      '/player/accounts/player-1/NINES/balance',
     )
 
     expect(accepted).toHaveLength(1)
@@ -572,7 +677,7 @@ describe('betting intake HTTP routes', () => {
 
     expect(poolTotal.body).toMatchObject({
       raceId: 'race-1',
-      currency: 'USDC',
+      currency: 'NINES',
       totalAcceptedStakeMinor: '2000',
       acceptedBetCount: 2,
     })

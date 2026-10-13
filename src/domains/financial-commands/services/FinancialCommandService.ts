@@ -60,7 +60,7 @@ import type {
   VoidPoolFromManualReviewCommandDto,
 } from '../dto/financialCommandDtos.js'
 
-const canonicalCurrency = 'USDC'
+const canonicalCurrency = 'NINES'
 const basisPointsDenominator = 10_000n
 
 interface SettlementAllocation {
@@ -226,10 +226,14 @@ export class FinancialCommandService {
 
     await this.assertPoolAndWinnerReadyForSettlement(command)
     const acceptedBets = (
-      await this.bettingRepository.listBetsByRaceId(command.raceId)
+      await this.bettingRepository.listBetsByRaceId(
+        command.raceId,
+        command.currency,
+      )
     ).filter((bet) => bet.status === 'accepted')
     const appliedCarryoverMinor = await this.getAppliedCarryoverMinor(
       command.raceId,
+      command.currency,
     )
     const settlement = this.calculatePoolProration(
       command,
@@ -332,6 +336,7 @@ export class FinancialCommandService {
 
       const lockedBets = await this.bettingRepository.listBetsByRaceIdForUpdate(
         command.raceId,
+        command.currency,
         transaction,
       )
       const lockedAcceptedBets = lockedBets.filter(
@@ -340,7 +345,11 @@ export class FinancialCommandService {
       const lockedSettlement = this.calculatePoolProration(
         command,
         lockedAcceptedBets,
-        await this.getAppliedCarryoverMinor(command.raceId, transaction),
+        await this.getAppliedCarryoverMinor(
+          command.raceId,
+          command.currency,
+          transaction,
+        ),
       )
       this.assertSettlementCalculationStable(settlement, lockedSettlement)
 
@@ -362,6 +371,7 @@ export class FinancialCommandService {
           houseTakeBps: command.houseTakeBps,
           idempotencyKey: command.idempotencyKey,
           commandFingerprint,
+          authoritativeResultId: command.authoritativeResultId ?? null,
           createdAt: now,
           updatedAt: now,
           startedAt: now,
@@ -812,7 +822,10 @@ export class FinancialCommandService {
       command.currency,
     )
     const preflightPendingCarryovers =
-      await this.bettingRepository.listCarryovers({ status: 'pending' })
+      await this.bettingRepository.listCarryovers({
+        status: 'pending',
+        currency: command.currency,
+      })
     const preflightEligibleCarryovers = this.eligibleCarryoversForTarget(
       preflightPendingCarryovers,
       preflightPools,
@@ -1391,12 +1404,14 @@ export class FinancialCommandService {
 
   private async getAppliedCarryoverMinor(
     raceId: string,
+    currency: 'NINES',
     queryable?: DatabaseTransaction,
   ): Promise<string> {
     const carryovers = await this.bettingRepository.listCarryovers(
       {
         status: 'applied',
         targetRaceId: raceId,
+        currency,
       },
       queryable,
     )
@@ -1504,6 +1519,7 @@ export class FinancialCommandService {
           raceId: command.raceId,
           winningSelectionId: command.winningSelectionId,
           houseTakeBps: command.houseTakeBps,
+          authoritativeResultId: command.authoritativeResultId ?? null,
           currency: command.currency,
         }),
       )
@@ -1616,7 +1632,12 @@ export class FinancialCommandService {
     return pendingCarryovers.filter((carryover) => {
       const sourcePool = poolByRaceId.get(carryover.sourceRaceId)
 
-      if (!sourcePool || carryover.sourceRaceId === targetRaceId) {
+      if (
+        !sourcePool ||
+        carryover.currency !== targetPool.currency ||
+        sourcePool.currency !== targetPool.currency ||
+        carryover.sourceRaceId === targetRaceId
+      ) {
         return false
       }
 
@@ -2134,7 +2155,7 @@ export class FinancialCommandService {
       throw new AppError({
         category: 'validation_error',
         code: 'UNSUPPORTED_CURRENCY',
-        message: 'USDC is the only supported front-of-house currency',
+        message: 'NINES is the only supported active wagering currency',
         details: { currency, supportedCurrencies: [canonicalCurrency] },
       })
     }

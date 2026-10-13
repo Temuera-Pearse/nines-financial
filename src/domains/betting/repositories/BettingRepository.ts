@@ -10,6 +10,10 @@ import type {
   SettlementReconciliationRunSummaryDto,
 } from '../dto/bettingDtos.js'
 import type { JsonObject } from '../../../shared/types/Json.js'
+import type {
+  FinancialCurrency,
+  PersistedWageringCurrency,
+} from '../../../contracts/financialAuthorityDtos.js'
 
 export type RacePoolStatus = RacePoolDto['status']
 export type SettlementRunStatus =
@@ -22,7 +26,7 @@ export type SettlementRunStatus =
 
 export interface CreateRacePoolRecord {
   raceId: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   status: RacePoolStatus
   bettingOpensAt: Date | null
   bettingClosesAt: Date | null
@@ -34,7 +38,7 @@ export interface CreateRacePoolRecord {
 export interface SettlementRunRecord {
   settlementRunId: string
   raceId: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   status: SettlementRunStatus
   winningSelectionId: string
   houseTakeBps: number
@@ -54,12 +58,13 @@ export interface SettlementRunRecord {
   failedAt: Date | null
   createdAt: Date
   updatedAt: Date
+  authoritativeResultId?: string | null
 }
 
 export interface CreateSettlementRunRecord {
   settlementRunId: string
   raceId: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   status: SettlementRunStatus
   winningSelectionId: string
   houseTakeBps: number
@@ -68,6 +73,7 @@ export interface CreateSettlementRunRecord {
   createdAt: Date
   updatedAt: Date
   startedAt: Date | null
+  authoritativeResultId?: string | null
 }
 
 export interface UpdateSettlementRunRecord {
@@ -91,7 +97,7 @@ export interface CreateSettlementCarryoverRecord {
   carryoverId: string
   settlementRunId: string
   raceId: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   amountMinor: string
   status: 'pending' | 'applied' | 'voided'
   reasonCode: string
@@ -104,7 +110,7 @@ export interface SettlementCarryoverRecord extends SettlementCarryoverDto {}
 export interface CarryoverApplicationRecord {
   applicationId: string
   targetRaceId: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   idempotencyKey: string
   commandFingerprint: string
   totalAmountMinor: string
@@ -117,7 +123,7 @@ export interface CarryoverApplicationRecord {
 export interface CreateCarryoverApplicationRecord {
   applicationId: string
   targetRaceId: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   idempotencyKey: string
   commandFingerprint: string
   totalAmountMinor: string
@@ -136,7 +142,7 @@ export interface SettlementRemediationActionRecord {
   remediationActionId: string
   actionType: SettlementRemediationActionType
   raceId: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   idempotencyKey: string
   commandFingerprint: string
   operatorId: string
@@ -150,7 +156,7 @@ export interface CreateSettlementRemediationActionRecord {
   remediationActionId: string
   actionType: SettlementRemediationActionType
   raceId: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   idempotencyKey: string
   commandFingerprint: string
   operatorId: string
@@ -176,7 +182,7 @@ export interface SettlementReconciliationRunSummaryRecord
 export interface CreateSettlementReconciliationRunRecord {
   reconciliationRunId: string
   raceId: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   status: 'completed' | 'failed'
   classification: 'informational' | 'discrepancy' | 'actionable_incident'
   actionRequired: boolean
@@ -195,7 +201,7 @@ export interface CreateSettlementReconciliationRunRecord {
 export interface CreatePoolSelectionRecord {
   raceId: string
   selectionId: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   status: 'active' | 'inactive'
   displayName: string | null
   createdAt: Date
@@ -208,7 +214,7 @@ export interface CreateBetRecord {
   raceId: string
   selectionId: string
   stakeMinor: string
-  currency: 'USDC'
+  currency: FinancialCurrency
   status: FinancialBetDto['status']
   rejectionCode: string | null
   rejectionReason: string | null
@@ -229,12 +235,12 @@ export interface BettingRepository {
   ): Promise<void>
   getRacePool(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<RacePoolDto | null>
   getRacePoolForUpdate(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     transaction: DatabaseTransaction,
   ): Promise<RacePoolDto | null>
   updateRacePool(
@@ -242,7 +248,7 @@ export interface BettingRepository {
     transaction: DatabaseTransaction,
   ): Promise<void>
   listRacePools(
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<RacePoolDto[]>
   createPoolSelection(
@@ -252,12 +258,12 @@ export interface BettingRepository {
   getPoolSelection(
     raceId: string,
     selectionId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<PoolSelectionDto | null>
   listPoolSelections(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<PoolSelectionDto[]>
   createBet(bet: CreateBetRecord, transaction: DatabaseTransaction): Promise<void>
@@ -267,10 +273,12 @@ export interface BettingRepository {
   ): Promise<FinancialBetDto | null>
   listBetsByRaceId(
     raceId: string,
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<FinancialBetDto[]>
   listBetsByRaceIdForUpdate(
     raceId: string,
+    currency: PersistedWageringCurrency,
     transaction: DatabaseTransaction,
   ): Promise<FinancialBetDto[]>
   listBetsByUserId(
@@ -296,12 +304,12 @@ export interface BettingRepository {
   ): Promise<SettlementRunRecord | null>
   getCompletedSettlementRunByRace(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementRunRecord | null>
   getActiveSettlementRunByRace(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementRunRecord | null>
   updateSettlementRun(
@@ -317,11 +325,12 @@ export interface BettingRepository {
       status?: SettlementCarryoverDto['status']
       sourceRaceId?: string
       targetRaceId?: string
+      currency?: PersistedWageringCurrency
     },
     queryable?: Queryable,
   ): Promise<SettlementCarryoverDto[]>
   listPendingCarryoversForUpdate(
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     transaction: DatabaseTransaction,
   ): Promise<SettlementCarryoverDto[]>
   markCarryoverApplied(
@@ -349,7 +358,7 @@ export interface BettingRepository {
   ): Promise<SettlementRunRecord | null>
   getLatestSettlementRunByRaceAndStatus(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     status: SettlementRunStatus,
     queryable?: Queryable,
   ): Promise<SettlementRunRecord | null>
@@ -363,11 +372,11 @@ export interface BettingRepository {
   ): Promise<void>
   detectSettlementReconciliationIssues(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementReconciliationIssueRecord[]>
   listManualReviewItems(
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementManualReviewItemRecord[]>
   getSettlementReconciliationRunByIdempotencyKey(
@@ -386,12 +395,12 @@ export interface BettingRepository {
   ): Promise<SettlementReconciliationRunSummaryRecord[]>
   getLivePoolTotal(
     raceId: string,
-    currency: 'USDC',
+    currency: FinancialCurrency,
     queryable?: Queryable,
   ): Promise<PoolTotalDto>
   listSelectionTotals(
     raceId: string,
-    currency: 'USDC',
+    currency: FinancialCurrency,
     queryable?: Queryable,
   ): Promise<SelectionTotalDto[]>
 }

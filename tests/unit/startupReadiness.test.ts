@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { getStartupReadinessReport } from '../../src/config/startupReadiness.js'
+import {
+  assertStartupReadiness,
+  getStartupReadinessReport,
+} from '../../src/config/startupReadiness.js'
 import {
   createTestDatabase,
   type TestDatabaseHarness,
@@ -37,7 +40,7 @@ describe('startup readiness', () => {
 
     expect(readiness.pendingMigrations).toEqual([])
     expect(readiness.latestAppliedMigration).toBe(
-      '018_legacy_deposit_credit_exactly_once.sql',
+      '025_authoritative_result_recovery.sql',
     )
   })
 
@@ -65,9 +68,28 @@ describe('startup readiness', () => {
 
     expect(readiness.pendingMigrations).toEqual(['003_pending.sql'])
     expect(readiness.latestAvailableMigration).toBe('003_pending.sql')
+    await expect(
+      assertStartupReadiness(harness.database, tempDirectory),
+    ).rejects.toThrow('pending migrations detected: 003_pending.sql')
   })
 
-  it('fails production readiness when the deposit webhook secret is missing', async () => {
+  it('does not require inactive provider secrets for the production funding-only profile', async () => {
+    harness = await createTestDatabase()
+    const migrationsDirectory = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../src/migrations',
+    )
+
+    const readiness = await getStartupReadinessReport(
+      harness.database,
+      migrationsDirectory,
+      { nodeEnv: 'production' },
+    )
+
+    expect(readiness.pendingMigrations).toEqual([])
+  })
+
+  it('fails production readiness when an explicitly active deposit provider lacks its secret', async () => {
     harness = await createTestDatabase()
     const migrationsDirectory = path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -77,13 +99,14 @@ describe('startup readiness', () => {
     await expect(
       getStartupReadinessReport(harness.database, migrationsDirectory, {
         nodeEnv: 'production',
+        legacyDepositProviderEnabled: true,
       }),
     ).rejects.toThrow(
       'NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',
     )
   })
 
-  it('fails production readiness when the withdrawal webhook secret is missing', async () => {
+  it('fails production readiness when an explicitly active withdrawal provider lacks its secret', async () => {
     harness = await createTestDatabase()
     const migrationsDirectory = path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -93,7 +116,7 @@ describe('startup readiness', () => {
     await expect(
       getStartupReadinessReport(harness.database, migrationsDirectory, {
         nodeEnv: 'production',
-        depositProviderWebhookSecret: 'deposit-secret',
+        withdrawalProviderEnabled: true,
       }),
     ).rejects.toThrow(
       'NINES_WITHDRAWAL_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',

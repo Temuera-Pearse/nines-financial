@@ -1,9 +1,16 @@
 import type { JsonObject } from '../types/Json.js'
 
 export type FaultPoint =
+  | 'place_bet.after_reservation_before_bet_persist'
+  | 'place_bet.after_bet_persist_before_commit'
+  | 'place_bet.after_idempotency_complete_before_commit'
   | 'settlement.after_state_record_creation_before_ledger_posting'
   | 'settlement.after_ledger_posting_before_state_finalization'
   | 'settlement.after_outbox_before_response'
+  | 'race_result.after_accept_before_settlement'
+  | 'race_result.after_settlement_before_result_completion'
+  | 'race_result.after_completion_before_response'
+  | 'race_result_recovery.after_claim'
   | 'carryover.after_ledger_posting_before_state_finalization'
   | 'deposit.after_event_record_before_credit'
   | 'deposit.after_ledger_posting_before_state_finalization'

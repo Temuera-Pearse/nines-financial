@@ -29,12 +29,18 @@ export async function createTestApplication(
   options: {
     faultInjector?: FaultInjector
     clock?: Clock
+    wagerIntakeEnabled?: boolean
+    raceLifecycleEnabled?: boolean
+    raceResultEnabled?: boolean
+    backendServiceAuthCredentials?: Readonly<Record<string, Readonly<Record<string, string>>>>
+    boundaryClock?: () => Date
   } = {},
 ): Promise<TestApplicationHarness> {
   const databaseHarness = await createTestDatabase()
+  const clock = options.clock ?? new FixedClock(now)
   const container = buildApplicationContainer({
     database: databaseHarness.database,
-    clock: options.clock ?? new FixedClock(now),
+    clock,
     faultInjector: options.faultInjector,
     depositProviderWebhookSecret: 'test-deposit-webhook-secret',
     withdrawalProviderWebhookSecret: 'test-withdrawal-webhook-secret',
@@ -45,12 +51,29 @@ export async function createTestApplication(
     ...databaseHarness,
     container,
     app: createApp({ ...container.services, ...container.handlers }, {
+      database: databaseHarness.database,
+      environment: 'test',
+      ...(options.wagerIntakeEnabled === undefined ? {} : {
+        wagerIntakeEnabled: options.wagerIntakeEnabled,
+      }),
+      ...(options.raceLifecycleEnabled === undefined ? {} : {
+        raceLifecycleEnabled: options.raceLifecycleEnabled,
+      }),
+      ...(options.raceResultEnabled === undefined ? {} : {
+        raceResultEnabled: options.raceResultEnabled,
+      }),
+      ...(options.backendServiceAuthCredentials === undefined ? {} : {
+        backendServiceAuthCredentials: options.backendServiceAuthCredentials,
+      }),
+      ...(options.boundaryClock === undefined ? {} : {
+        boundaryClock: options.boundaryClock,
+      }),
       readinessCheck: async () => ({
         checkedAt: now,
         latestAvailableMigration:
-          '018_legacy_deposit_credit_exactly_once.sql',
+          '025_authoritative_result_recovery.sql',
         latestAppliedMigration:
-          '018_legacy_deposit_credit_exactly_once.sql',
+          '025_authoritative_result_recovery.sql',
         pendingMigrations: [],
       }),
     }),

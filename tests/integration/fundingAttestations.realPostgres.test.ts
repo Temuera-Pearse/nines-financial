@@ -6,8 +6,43 @@ import { createRealPostgresTestApplication, realPostgresDrillsEnabled,
   type RealPostgresTestApplicationHarness } from '../support/realPostgresTestApp.js'
 import { toIdempotencyKey } from '../../src/shared/idempotency/types.js'
 import { toUserId } from '../../src/domains/account/types/identifiers.js'
+import type { NinesIssuanceAuthorizationV1 } from '../../src/domains/issuance-authorizations/dto/NinesIssuanceAuthorization.js'
 
 const suite = realPostgresDrillsEnabled() ? describe : describe.skip
+
+function issuanceAuthorization(overrides: Partial<NinesIssuanceAuthorizationV1> = {}):
+NinesIssuanceAuthorizationV1 {
+  const authorizationId = randomUUID()
+  const fundingIntentId = randomUUID()
+  const confirmationEventId = randomUUID()
+  const completedValuationId = randomUUID()
+  return {
+    schemaVersion: 1, eventType: 'nines_issuance_authorized', authorizationId,
+    issuer: 'nines-api', audience: 'nines-financial', environment: 'test',
+    playerId: randomUUID(),
+    funding: { intentId: fundingIntentId, confirmationEventId,
+      evidenceIdentity: `crypto-funding-confirmation:v1:${fundingIntentId}:${confirmationEventId}`,
+      requestHash: 'a'.repeat(64), confirmationPayloadHash: 'b'.repeat(64),
+      provider: 'fake', paymentReference: `payment-${randomUUID()}` },
+    valuation: { workflowId: randomUUID(), completedValuationId,
+      completionKey: `funding-nzd-valuation:v1:test:${fundingIntentId}`,
+      evidenceFingerprint: 'c'.repeat(64), valuedAt: '2026-04-22T11:58:00.000Z',
+      profileVersion: 'funding-nzd-valuation-profile-v1', finalNzdAmount: '123.45',
+      finalNzdMinorUnits: '12345', calculationPolicyVersion: 'nzd-valuation-calculation-v1',
+      roundingPolicyVersion: 'nzd-valuation-rounding-v1' },
+    issuance: { policyVersion: 'nzd-valuation-to-nines-par-v1', currency: 'NINES',
+      scale: 6, minorUnits: '123450000' },
+    authorizedAt: '2026-04-22T11:59:00.000Z', correlationId: `corr-${authorizationId}`,
+    causationId: completedValuationId,
+    ...overrides,
+  }
+}
+
+function requestContext() {
+  return { serviceId: 'nines-api', requestId: randomUUID(),
+    sentAt: new Date('2026-04-22T12:00:00.000Z'),
+    receivedAt: new Date('2026-04-22T12:00:00.000Z') }
+}
 
 suite('NINES issuance real PostgreSQL proof', () => {
   let harness: RealPostgresTestApplicationHarness
@@ -170,5 +205,81 @@ suite('NINES issuance real PostgreSQL proof', () => {
     const persisted=await harness.database.query<{count:string}>(
       'SELECT count(*) FROM service_request_nonces WHERE request_id=$1',[requestId])
     expect(persisted.rows[0]?.count).toBe('1')
+  })
+
+  it('consumes one valuation authorization into one exact clearing-to-player posting under concurrency', async () => {
+    const body = issuanceAuthorization()
+    const results = await Promise.all(Array.from({ length: 8 }, () =>
+      harness.container.services.ninesIssuanceAuthorizationService.consume(body, requestContext())))
+    expect(results.filter((result) => result.result === 'accepted')).toHaveLength(1)
+    expect(results.filter((result) => result.result === 'already_consumed')).toHaveLength(7)
+    expect(new Set(results.map((result) => result.financialConsumptionId)).size).toBe(1)
+    expect(new Set(results.map((result) => result.ledgerTransactionId)).size).toBe(1)
+    const evidence = await harness.database.query<{
+      consumptions: string; transactions: string; entries: string; balance: string
+    }>(`SELECT
+      (SELECT COUNT(*) FROM nines_issuance_authorization_consumptions WHERE authorization_id=$1::uuid) consumptions,
+      (SELECT COUNT(*) FROM ledger_transactions WHERE reference_type='issuance_authorization' AND reference_id=$1::text) transactions,
+      (SELECT COUNT(*) FROM ledger_entries WHERE transaction_id=$2) entries,
+      (SELECT balance_minor::TEXT FROM account_balances balance JOIN accounts account
+       ON account.account_id=balance.account_id WHERE account.owner_type='user'
+       AND account.owner_id=$3 AND account.account_type='user_available' AND account.currency='NINES') balance`,
+    [body.authorizationId, results[0]!.ledgerTransactionId, body.playerId])
+    expect(evidence.rows[0]).toEqual({ consumptions: '1', transactions: '1', entries: '2',
+      balance: '123450000' })
+    const posting = await harness.database.query<{ direction: string; account_type: string;
+      owner_type: string; amount_minor: string }>(`SELECT entry.direction,account.account_type,
+      account.owner_type,entry.amount_minor::TEXT FROM ledger_entries entry JOIN accounts account
+      ON account.account_id=entry.account_id WHERE entry.transaction_id=$1 ORDER BY entry.direction`,
+    [results[0]!.ledgerTransactionId])
+    expect(posting.rows).toEqual([
+      { direction: 'credit', account_type: 'user_available', owner_type: 'user', amount_minor: '123450000' },
+      { direction: 'debit', account_type: 'token_purchase_clearing', owner_type: 'platform', amount_minor: '123450000' },
+    ])
+    await expect(harness.database.query(`UPDATE nines_issuance_authorization_consumptions
+      SET issued_minor_units=1 WHERE authorization_id=$1`, [body.authorizationId]))
+      .rejects.toThrow('immutable')
+  })
+
+  it('rejects conflicting replay and duplicate funding or completed valuation without another credit', async () => {
+    const body = issuanceAuthorization()
+    await harness.container.services.ninesIssuanceAuthorizationService.consume(body, requestContext())
+    await expect(harness.container.services.ninesIssuanceAuthorizationService.consume({ ...body,
+      correlationId: `${body.correlationId}-conflict` }, requestContext()))
+      .rejects.toMatchObject({ code: 'ISSUANCE_AUTHORIZATION_PAYLOAD_CONFLICT' })
+    const duplicateFunding = issuanceAuthorization({ funding: body.funding })
+    await expect(harness.container.services.ninesIssuanceAuthorizationService.consume(
+      duplicateFunding, requestContext())).rejects.toMatchObject({ code: 'ISSUANCE_FUNDING_ALREADY_CONSUMED' })
+    const duplicateValuation = issuanceAuthorization({ valuation: body.valuation,
+      causationId: body.valuation.completedValuationId })
+    await expect(harness.container.services.ninesIssuanceAuthorizationService.consume(
+      duplicateValuation, requestContext())).rejects.toMatchObject({ code: 'ISSUANCE_FUNDING_ALREADY_CONSUMED' })
+    const count = await harness.database.query<{ count: string }>(
+      `SELECT COUNT(*) FROM ledger_transactions WHERE reference_type='issuance_authorization'
+       AND reference_id=$1`, [body.authorizationId])
+    expect(count.rows[0]?.count).toBe('1')
+  })
+
+  it('rolls back ledger, balance, claim, nonce and evidence when consumption persistence fails', async () => {
+    const body = issuanceAuthorization()
+    const context = requestContext()
+    await harness.database.query(`ALTER TABLE nines_issuance_authorization_consumptions
+      ADD CONSTRAINT proof_force_authorization_consumption_failure CHECK (issued_minor_units=1) NOT VALID`)
+    try {
+      await expect(harness.container.services.ninesIssuanceAuthorizationService.consume(body, context))
+        .rejects.toThrow()
+    } finally {
+      await harness.database.query(`ALTER TABLE nines_issuance_authorization_consumptions
+        DROP CONSTRAINT proof_force_authorization_consumption_failure`)
+    }
+    const counts = await harness.database.query<{ ledger: string; consumption: string;
+      claim: string; nonce: string; evidence: string }>(`SELECT
+      (SELECT COUNT(*) FROM ledger_transactions WHERE reference_id=$1) ledger,
+      (SELECT COUNT(*) FROM nines_issuance_authorization_consumptions WHERE authorization_id=$1::uuid) consumption,
+      (SELECT COUNT(*) FROM funding_economic_consumption_claims WHERE source_id=$1::uuid) claim,
+      (SELECT COUNT(*) FROM service_request_nonces WHERE request_id=$2) nonce,
+      (SELECT COUNT(*) FROM security_evidence_outbox WHERE issuance_authorization_id=$1::uuid) evidence`,
+    [body.authorizationId, context.requestId])
+    expect(counts.rows[0]).toEqual({ ledger: '0', consumption: '0', claim: '0', nonce: '0', evidence: '0' })
   })
 })

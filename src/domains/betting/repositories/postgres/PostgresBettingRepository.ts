@@ -32,10 +32,14 @@ import type {
   UpdateSettlementRunRecord,
 } from '../BettingRepository.js'
 import type { JsonObject } from '../../../../shared/types/Json.js'
+import type {
+  FinancialCurrency,
+  PersistedWageringCurrency,
+} from '../../../../contracts/financialAuthorityDtos.js'
 
 interface RacePoolRow extends QueryResultRow {
   race_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   status: RacePoolDto['status']
   betting_opens_at: Date | string | null
   betting_closes_at: Date | string | null
@@ -47,7 +51,7 @@ interface RacePoolRow extends QueryResultRow {
 interface PoolSelectionRow extends QueryResultRow {
   race_id: string
   selection_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   status: 'active' | 'inactive'
   display_name: string | null
   created_at: Date | string
@@ -60,7 +64,7 @@ interface BetRow extends QueryResultRow {
   race_id: string
   selection_id: string
   stake_minor: string | number
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   status: FinancialBetDto['status']
   rejection_code: string | null
   rejection_reason: string | null
@@ -74,7 +78,7 @@ interface BetRow extends QueryResultRow {
 interface SettlementRunRow extends QueryResultRow {
   settlement_run_id: string
   race_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   status: SettlementRunRecord['status']
   winning_selection_id: string
   house_take_bps: number
@@ -94,13 +98,14 @@ interface SettlementRunRow extends QueryResultRow {
   failed_at: Date | string | null
   created_at: Date | string
   updated_at: Date | string
+  authoritative_result_id: string | null
 }
 
 interface SettlementCarryoverRow extends QueryResultRow {
   carryover_id: string
   settlement_run_id: string
   race_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   amount_minor: string | number
   status: SettlementCarryoverRecord['status']
   reason_code: string
@@ -115,7 +120,7 @@ interface SettlementCarryoverRow extends QueryResultRow {
 interface CarryoverApplicationRow extends QueryResultRow {
   application_id: string
   target_race_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   idempotency_key: string
   command_fingerprint: string
   total_amount_minor: string | number
@@ -129,7 +134,7 @@ interface SettlementRemediationActionRow extends QueryResultRow {
   remediation_action_id: string
   action_type: SettlementRemediationActionRecord['actionType']
   race_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   idempotency_key: string
   command_fingerprint: string
   operator_id: string
@@ -141,7 +146,7 @@ interface SettlementRemediationActionRow extends QueryResultRow {
 
 interface SettlementManualReviewItemRow extends QueryResultRow {
   race_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   pool_status: RacePoolDto['status']
   pool_updated_at: Date | string
   settlement_run_id: string | null
@@ -155,7 +160,7 @@ interface SettlementManualReviewItemRow extends QueryResultRow {
 interface SettlementReconciliationRunRow extends QueryResultRow {
   reconciliation_run_id: string
   race_id: string
-  currency: 'USDC'
+  currency: PersistedWageringCurrency
   status: 'completed' | 'failed'
   classification: 'informational' | 'discrepancy' | 'actionable_incident'
   action_required: boolean
@@ -326,6 +331,7 @@ function toSettlementRun(row: SettlementRunRow): SettlementRunRecord {
       row.updated_at instanceof Date
         ? new Date(row.updated_at)
         : new Date(row.updated_at),
+    authoritativeResultId: row.authoritative_result_id,
   }
 }
 
@@ -502,7 +508,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async getRacePool(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<RacePoolDto | null> {
     const executor = queryable ?? this.database
@@ -521,7 +527,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async getRacePoolForUpdate(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     transaction: DatabaseTransaction,
   ): Promise<RacePoolDto | null> {
     const result = await transaction.query<RacePoolRow>(
@@ -564,7 +570,7 @@ export class PostgresBettingRepository implements BettingRepository {
   }
 
   async listRacePools(
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<RacePoolDto[]> {
     const executor = queryable ?? this.database
@@ -629,7 +635,7 @@ export class PostgresBettingRepository implements BettingRepository {
   async getPoolSelection(
     raceId: string,
     selectionId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<PoolSelectionDto | null> {
     const executor = queryable ?? this.database
@@ -650,7 +656,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async listPoolSelections(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<PoolSelectionDto[]> {
     const executor = queryable ?? this.database
@@ -744,6 +750,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async listBetsByRaceId(
     raceId: string,
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<FinancialBetDto[]> {
     const executor = queryable ?? this.database
@@ -752,9 +759,10 @@ export class PostgresBettingRepository implements BettingRepository {
         SELECT *
         FROM financial_bets
         WHERE race_id = $1
+          AND currency = $2
         ORDER BY created_at ASC, bet_id ASC
       `,
-      [raceId],
+      [raceId, currency],
     )
 
     return result.rows.map((row) => toBet(row))
@@ -762,6 +770,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async listBetsByRaceIdForUpdate(
     raceId: string,
+    currency: PersistedWageringCurrency,
     transaction: DatabaseTransaction,
   ): Promise<FinancialBetDto[]> {
     const result = await transaction.query<BetRow>(
@@ -769,10 +778,11 @@ export class PostgresBettingRepository implements BettingRepository {
         SELECT *
         FROM financial_bets
         WHERE race_id = $1
+          AND currency = $2
         ORDER BY created_at ASC, bet_id ASC
         FOR UPDATE
       `,
-      [raceId],
+      [raceId, currency],
     )
 
     return result.rows.map((row) => toBet(row))
@@ -842,11 +852,12 @@ export class PostgresBettingRepository implements BettingRepository {
             house_take_bps,
             idempotency_key,
             command_fingerprint,
+            authoritative_result_id,
             started_at,
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         `,
         [
           run.settlementRunId,
@@ -857,6 +868,7 @@ export class PostgresBettingRepository implements BettingRepository {
           run.houseTakeBps,
           run.idempotencyKey,
           run.commandFingerprint,
+          run.authoritativeResultId ?? null,
           run.startedAt,
           run.createdAt,
           run.updatedAt,
@@ -900,7 +912,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async getCompletedSettlementRunByRace(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementRunRecord | null> {
     const executor = queryable ?? this.database
@@ -922,7 +934,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async getActiveSettlementRunByRace(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementRunRecord | null> {
     const executor = queryable ?? this.database
@@ -1043,6 +1055,7 @@ export class PostgresBettingRepository implements BettingRepository {
       status?: SettlementCarryoverRecord['status']
       sourceRaceId?: string
       targetRaceId?: string
+      currency?: PersistedWageringCurrency
     },
     queryable?: Queryable,
   ): Promise<SettlementCarryoverRecord[]> {
@@ -1065,6 +1078,11 @@ export class PostgresBettingRepository implements BettingRepository {
       clauses.push(`applied_to_race_id = $${params.length}`)
     }
 
+    if (criteria.currency) {
+      params.push(criteria.currency)
+      clauses.push(`currency = $${params.length}`)
+    }
+
     const result = await executor.query<SettlementCarryoverRow>(
       `
         SELECT *
@@ -1079,7 +1097,7 @@ export class PostgresBettingRepository implements BettingRepository {
   }
 
   async listPendingCarryoversForUpdate(
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     transaction: DatabaseTransaction,
   ): Promise<SettlementCarryoverRecord[]> {
     const result = await transaction.query<SettlementCarryoverRow>(
@@ -1226,7 +1244,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async getLatestSettlementRunByRaceAndStatus(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     status: SettlementRunRecord['status'],
     queryable?: Queryable,
   ): Promise<SettlementRunRecord | null> {
@@ -1319,7 +1337,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async detectSettlementReconciliationIssues(
     raceId: string,
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementReconciliationIssueRecord[]> {
     const executor = queryable ?? this.database
@@ -1528,7 +1546,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
     const allPools = await this.listRacePools(currency, executor)
     const pendingCarryovers = await this.listCarryovers(
-      { status: 'pending' },
+      { status: 'pending', currency },
       executor,
     )
 
@@ -1563,7 +1581,7 @@ export class PostgresBettingRepository implements BettingRepository {
     }
 
     const appliedCarryovers = await this.listCarryovers(
-      { status: 'applied', targetRaceId: raceId },
+      { status: 'applied', targetRaceId: raceId, currency },
       executor,
     )
 
@@ -1629,7 +1647,7 @@ export class PostgresBettingRepository implements BettingRepository {
   }
 
   async listManualReviewItems(
-    currency: 'USDC',
+    currency: PersistedWageringCurrency,
     queryable?: Queryable,
   ): Promise<SettlementManualReviewItemRecord[]> {
     const executor = queryable ?? this.database
@@ -1779,7 +1797,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async getLivePoolTotal(
     raceId: string,
-    currency: 'USDC',
+    currency: FinancialCurrency,
     queryable?: Queryable,
   ): Promise<PoolTotalDto> {
     const executor = queryable ?? this.database
@@ -1829,7 +1847,7 @@ export class PostgresBettingRepository implements BettingRepository {
 
   async listSelectionTotals(
     raceId: string,
-    currency: 'USDC',
+    currency: FinancialCurrency,
     queryable?: Queryable,
   ): Promise<SelectionTotalDto[]> {
     const executor = queryable ?? this.database

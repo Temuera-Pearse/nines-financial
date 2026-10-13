@@ -210,13 +210,14 @@ async function fundPlayer(
   harness: DrillHarness,
   userId: string,
   amountMinor = '5000',
+  currency = 'USDC',
 ) {
   const playerAccount =
     await harness.container.services.playerAccountProvisioningService.provisionIfNeeded(
       {
         idempotencyKey: toIdempotencyKey(`real-pg-provision-${userId}`),
         userId: toUserId(userId),
-        currency: 'USDC',
+        currency,
         correlationId: `corr_real_pg_provision_${userId}`,
         causationId: `cause_real_pg_provision_${userId}`,
       },
@@ -225,7 +226,7 @@ async function fundPlayer(
     accountType: 'deposit_clearing',
     ownerType: 'platform',
     ownerId: toOwnerId(`real-pg-deposit-source-${userId}`),
-    currency: 'USDC',
+    currency,
     correlationId: `corr_real_pg_deposit_source_${userId}`,
     causationId: `cause_real_pg_deposit_source_${userId}`,
     idempotencyKey: toIdempotencyKey(`real-pg-deposit-source-${userId}`),
@@ -239,7 +240,7 @@ async function fundPlayer(
     debitAccountId: depositSource.accountId,
     creditAccountId: playerAccount.availableAccountId,
     amountMinor,
-    currency: 'USDC',
+    currency,
     correlationId: `corr_real_pg_fund_${userId}`,
     causationId: `cause_real_pg_fund_${userId}`,
   })
@@ -394,7 +395,7 @@ async function createPool(
       correlationId: `corr_real_pg_pool_${raceId}`,
       causationId: `cause_real_pg_pool_${raceId}`,
       raceId,
-      currency: 'USDC',
+      currency: 'NINES',
       bettingOpensAt,
     })
 
@@ -407,7 +408,7 @@ async function createPool(
         causationId: `cause_real_pg_selection_${raceId}_${selectionId}`,
         raceId,
         selectionId,
-        currency: 'USDC',
+        currency: 'NINES',
       })
   }
 }
@@ -422,7 +423,7 @@ async function placeBet(
     stakeMinor: string
   },
 ) {
-  await fundPlayer(harness, input.userId, input.stakeMinor)
+  await fundPlayer(harness, input.userId, input.stakeMinor, 'NINES')
 
   await request(harness.app)
     .post('/commands/place-bet')
@@ -435,7 +436,7 @@ async function placeBet(
       raceId: input.raceId,
       selectionId: input.selectionId,
       stakeMinor: input.stakeMinor,
-      currency: 'USDC',
+      currency: 'NINES',
     })
 }
 
@@ -447,7 +448,7 @@ async function freezePool(harness: DrillHarness, raceId: string) {
       correlationId: `corr_real_pg_freeze_${raceId}`,
       causationId: `cause_real_pg_freeze_${raceId}`,
       raceId,
-      currency: 'USDC',
+      currency: 'NINES',
       reasonCode: 'race_finished',
     })
 }
@@ -496,7 +497,7 @@ async function createPendingCarryover(harness: DrillHarness, sourceRaceId: strin
       raceId: sourceRaceId,
       winningSelectionId: 'horse-winner',
       houseTakeBps: 1000,
-      currency: 'USDC',
+      currency: 'NINES',
     })
 }
 
@@ -1675,7 +1676,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
           raceId: 'race-real-pg-settlement',
           winningSelectionId: 'horse-1',
           houseTakeBps: 0,
-          currency: 'USDC',
+          currency: 'NINES',
         })),
         ...Array.from({ length: 5 }, (_, index) => ({
           idempotencyKey: `real-pg-settle-competitor-${index}`,
@@ -1684,7 +1685,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
           raceId: 'race-real-pg-settlement',
           winningSelectionId: 'horse-1',
           houseTakeBps: 0,
-          currency: 'USDC',
+          currency: 'NINES',
         })),
       ]
 
@@ -1748,14 +1749,14 @@ describe.skipIf(!realPostgresDrillsEnabled())(
           correlationId: 'corr_real_pg_apply_carryover_shared',
           causationId: 'cause_real_pg_apply_carryover_shared',
           targetRaceId: 'race-real-pg-carryover-target',
-          currency: 'USDC',
+          currency: 'NINES',
         })),
         ...Array.from({ length: 5 }, (_, index) => ({
           idempotencyKey: `real-pg-apply-carryover-competitor-${index}`,
           correlationId: `corr_real_pg_apply_carryover_competitor_${index}`,
           causationId: `cause_real_pg_apply_carryover_competitor_${index}`,
           targetRaceId: 'race-real-pg-carryover-target',
-          currency: 'USDC',
+          currency: 'NINES',
         })),
       ]
 
@@ -1797,7 +1798,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
         correlationId: `corr_real_pg_mark_review_${index}`,
         causationId: `cause_real_pg_mark_review_${index}`,
         raceId: 'race-real-pg-review',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: `operator-${index}`,
         reasonCode: 'CONCURRENT_REVIEW_DRILL',
         reasonText: `operator ${index}`,
@@ -1824,7 +1825,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
         correlationId: `corr_real_pg_resolve_review_${index}`,
         causationId: `cause_real_pg_resolve_review_${index}`,
         raceId: 'race-real-pg-review',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: `resolver-${index}`,
         resolutionCode: 'RETRY_ALLOWED',
       }))
@@ -1908,7 +1909,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
         raceId: 'race-real-pg-interrupt-settlement',
         winningSelectionId: 'horse-1',
         houseTakeBps: 0,
-        currency: 'USDC',
+        currency: 'NINES',
       }
 
       const interrupted = await request(harness.app)
@@ -1954,7 +1955,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
         correlationId: 'corr_real_pg_apply_interrupted_carryover',
         causationId: 'cause_real_pg_apply_interrupted_carryover',
         targetRaceId: 'race-real-pg-interrupt-carryover-target',
-        currency: 'USDC',
+        currency: 'NINES',
       }
 
       const interrupted = await request(harness.app)
@@ -2032,7 +2033,7 @@ describe.skipIf(!realPostgresDrillsEnabled())(
         raceId: 'race-real-pg-restart',
         winningSelectionId: 'horse-1',
         houseTakeBps: 0,
-        currency: 'USDC',
+        currency: 'NINES',
       }
 
       const first = await request(harness.app)

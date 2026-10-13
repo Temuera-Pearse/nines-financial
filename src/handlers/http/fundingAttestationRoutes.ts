@@ -3,7 +3,10 @@ import { Router, type Request } from 'express'
 
 import type { Database } from '../../shared/db/Database.js'
 import { canonicalizeJson, hashCanonicalJson } from '../../shared/contracts/canonicalJson.js'
-import { verifyServiceMessage } from '../../shared/security/ServiceMessageAuthentication.js'
+import {
+  isValidServiceRequestId,
+  verifyServiceMessage,
+} from '../../shared/security/ServiceMessageAuthentication.js'
 import { AppError } from '../../shared/types/AppError.js'
 import type { JsonValue } from '../../shared/types/Json.js'
 import { confirmedFundingAttestationV1Schema } from '../../domains/funding-attestations/dto/ConfirmedFundingAttestation.js'
@@ -15,9 +18,8 @@ export interface FundingAttestationRouteOptions {
   database: Database
   service: FundingAttestationService
   environment: 'development' | 'test' | 'production'
-  hmacSecret: string
+  credentials: Readonly<Record<string, Readonly<Record<string, string>>>>
   expectedServiceId?: string
-  expectedKeyId?: string
   replayWindowSeconds?: number
   clock?: () => Date
 }
@@ -30,7 +32,20 @@ function requiredHeader(request: Request, name: string): string {
 }
 
 export function createFundingAttestationRouter(options: FundingAttestationRouteOptions): Router {
-  if (options.hmacSecret.length < 32) throw new Error('Financial service authentication secret must contain at least 32 characters')
+  const expectedServiceId = options.expectedServiceId ?? 'nines-api'
+  const expectedCredentials = Object.hasOwn(options.credentials, expectedServiceId)
+    ? options.credentials[expectedServiceId]
+    : undefined
+  if (!expectedCredentials || Object.keys(expectedCredentials).length === 0) {
+    throw new Error(`No service authentication credentials configured for ${expectedServiceId}`)
+  }
+  for (const keys of Object.values(options.credentials)) {
+    for (const secret of Object.values(keys)) {
+      if (typeof secret !== 'string' || secret.length < 32) {
+        throw new Error('Financial service authentication secret must contain at least 32 characters')
+      }
+    }
+  }
   const router = Router()
   const clock = options.clock ?? (() => new Date())
   const replayWindowMs = (options.replayWindowSeconds ?? 300) * 1000
@@ -39,13 +54,22 @@ export function createFundingAttestationRouter(options: FundingAttestationRouteO
     try {
       const serviceId = requiredHeader(request, 'x-nines-service-id')
       const requestId = requiredHeader(request, 'x-nines-request-id')
+      if (!isValidServiceRequestId(requestId)) throw new AppError({
+        category: 'forbidden', code: 'SERVICE_AUTH_INVALID_REQUEST_ID',
+        message: 'Service authentication request ID is invalid' })
       const sentAt = requiredHeader(request, 'x-nines-sent-at')
       const contentHash = requiredHeader(request, 'x-nines-content-sha256')
       const signature = requiredHeader(request, 'x-nines-signature')
       const keyId = requiredHeader(request, 'x-nines-key-id')
-      if (serviceId !== (options.expectedServiceId ?? 'nines-api')) throw new AppError({
+      if (serviceId !== expectedServiceId) throw new AppError({
         category: 'forbidden', code: 'SERVICE_AUTH_UNTRUSTED_ISSUER', message: 'Untrusted calling service' })
-      if (keyId !== (options.expectedKeyId ?? 'development-hmac-v1')) throw new AppError({
+      const serviceCredentials = Object.hasOwn(options.credentials, serviceId)
+        ? options.credentials[serviceId]
+        : undefined
+      const secret = serviceCredentials && Object.hasOwn(serviceCredentials, keyId)
+        ? serviceCredentials[keyId]
+        : undefined
+      if (typeof secret !== 'string') throw new AppError({
         category: 'forbidden', code: 'SERVICE_AUTH_UNTRUSTED_KEY', message: 'Untrusted service authentication key' })
       const receivedAt = clock()
       const parsedSentAt = Date.parse(sentAt)
@@ -56,7 +80,7 @@ export function createFundingAttestationRouter(options: FundingAttestationRouteO
       const canonicalHash = hashCanonicalJson(request.body as JsonValue)
       if (canonicalHash !== contentHash || !verifyServiceMessage({ method: request.method,
         path: PATH, environment: options.environment, serviceId, keyId, requestId, sentAt, contentHash,
-        signature, secret: options.hmacSecret })) {
+        signature, secret })) {
         throw new AppError({ category: 'forbidden', code: 'SERVICE_AUTH_INVALID_SIGNATURE',
           message: 'Service request authentication failed' })
       }

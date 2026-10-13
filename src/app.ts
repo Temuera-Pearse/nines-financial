@@ -4,7 +4,10 @@ import type { AccountService } from './domains/accounting/services/AccountServic
 import type { BalanceMaintenanceService } from './domains/accounting/services/BalanceMaintenanceService.js'
 import type { PostingEngineService } from './domains/accounting/services/PostingEngineService.js'
 import type { ReservationService } from './domains/accounting/services/ReservationService.js'
-import type { StartupReadinessReport } from './config/startupReadiness.js'
+import {
+  assertReadinessReportReady,
+  type StartupReadinessReport,
+} from './config/startupReadiness.js'
 import type { AdminOpsReadService } from './domains/admin/services/AdminOpsReadService.js'
 import type { ApplyFreezeHandler } from './domains/account/handlers/ApplyFreezeHandler.js'
 import type { ApplyRestrictionHandler } from './domains/account/handlers/ApplyRestrictionHandler.js'
@@ -108,7 +111,16 @@ import { createSystemRouter } from './handlers/http/systemRoutes.js'
 import { createWithdrawalRouter } from './handlers/http/withdrawalRoutes.js'
 import { createFundingAttestationRouter } from './handlers/http/fundingAttestationRoutes.js'
 import type { FundingAttestationService } from './domains/funding-attestations/services/FundingAttestationService.js'
+import { createNinesIssuanceAuthorizationRouter } from './handlers/http/ninesIssuanceAuthorizationRoutes.js'
+import type { NinesIssuanceAuthorizationService } from './domains/issuance-authorizations/services/NinesIssuanceAuthorizationService.js'
 import type { Database } from './shared/db/Database.js'
+import type { BettingIntakeService } from './domains/betting/services/BettingIntakeService.js'
+import { createNinesPlaceBetRouter } from './handlers/http/ninesPlaceBetRoutes.js'
+import { createRaceLifecycleRouter } from './handlers/http/raceLifecycleRoutes.js'
+import { RaceLifecycleProjectionService } from './domains/race-lifecycle/services/RaceLifecycleProjectionService.js'
+import { createRaceResultRouter } from './handlers/http/raceResultRoutes.js'
+import type { RaceResultSettlementService } from './domains/race-results/services/RaceResultSettlementService.js'
+import { createPlayerGameplayRouter, PLAYER_GAMEPLAY_STATE_PATH } from './handlers/http/playerGameplayRoutes.js'
 
 export interface HttpApplicationServices {
   accountService: AccountService
@@ -193,24 +205,61 @@ export interface HttpApplicationServices {
   depositTimelineHandler: DepositTimelineHandler
   withdrawalTimelineHandler: WithdrawalTimelineHandler
   fundingAttestationService: FundingAttestationService
+  ninesIssuanceAuthorizationService: NinesIssuanceAuthorizationService
+  bettingIntakeService: BettingIntakeService
+  raceResultSettlementService: RaceResultSettlementService
 }
 
 export interface CreateAppOptions {
+  environment: 'development' | 'test' | 'production'
   readinessCheck?: () => Promise<StartupReadinessReport>
   database?: Database
-  environment?: 'development' | 'test' | 'production'
   fundingAttestationsEnabled?: boolean
   legacyDepositProviderEnabled?: boolean
-  serviceAuthHmacSecret?: string
-  serviceAuthKeyId?: string
+  serviceAuthCredentials?: Readonly<Record<string, Readonly<Record<string, string>>>>
   serviceAuthReplayWindowSeconds?: number
+  wagerIntakeEnabled?: boolean
+  raceLifecycleEnabled?: boolean
+  raceResultEnabled?: boolean
+  playerGameplayReadEnabled?: boolean
+  backendServiceAuthCredentials?: Readonly<Record<string, Readonly<Record<string, string>>>>
+  boundaryClock?: () => Date
 }
+
+export type HttpRouteProfile =
+  | 'production-funding-only'
+  | 'full-simulation'
+
+export function resolveHttpRouteProfile(
+  environment: CreateAppOptions['environment'],
+): HttpRouteProfile {
+  if (environment === 'production') return 'production-funding-only'
+  if (environment === 'development' || environment === 'test') {
+    return 'full-simulation'
+  }
+  throw new Error('HTTP application environment must be explicitly configured')
+}
+
+export const productionHttpRoutes = Object.freeze([
+  Object.freeze({ method: 'GET', path: '/health' }),
+  Object.freeze({ method: 'GET', path: '/ready' }),
+  Object.freeze({ method: 'POST', path: '/internal/v1/funding-attestations' }),
+  Object.freeze({ method: 'POST', path: '/internal/v1/nines-issuance-authorizations' }),
+  Object.freeze({ method: 'POST', path: '/internal/v1/wagers/place-bet' }),
+  Object.freeze({ method: 'POST', path: '/internal/v1/race-lifecycle-events' }),
+  Object.freeze({ method: 'POST', path: '/internal/v1/race-results' }),
+  Object.freeze({ method: 'POST', path: PLAYER_GAMEPLAY_STATE_PATH }),
+] as const)
 
 export function createApp(
   services: HttpApplicationServices,
-  options: CreateAppOptions = {},
+  options: CreateAppOptions,
 ) {
+  if (!options || !options.environment) {
+    throw new Error('HTTP application environment must be explicitly configured')
+  }
   const app = express()
+  const routeProfile = resolveHttpRouteProfile(options.environment)
   const readinessCheck =
     options.readinessCheck ??
     (async () => ({
@@ -219,6 +268,32 @@ export function createApp(
       latestAppliedMigration: null,
       pendingMigrations: [],
     }))
+
+  if (routeProfile === 'production-funding-only') {
+    const approvedRequests = new Set(
+      productionHttpRoutes
+        .filter((route) => {
+          if (['/internal/v1/funding-attestations',
+            '/internal/v1/nines-issuance-authorizations'].includes(route.path)) {
+            return options.fundingAttestationsEnabled
+          }
+          if (route.path === '/internal/v1/wagers/place-bet') return options.wagerIntakeEnabled
+          if (route.path === '/internal/v1/race-lifecycle-events') return options.raceLifecycleEnabled
+          if (route.path === '/internal/v1/race-results') return options.raceResultEnabled
+          if (route.path === PLAYER_GAMEPLAY_STATE_PATH) return options.playerGameplayReadEnabled
+          return true
+        })
+        .map((route) => `${route.method} ${route.path}`),
+    )
+    app.use((request, response, next) => {
+      const rawPath = request.originalUrl.split('?', 1)[0]
+      if (rawPath && approvedRequests.has(`${request.method} ${rawPath}`)) {
+        next()
+        return
+      }
+      response.status(404).end()
+    })
+  }
 
   app.use(
     express.json({
@@ -230,6 +305,133 @@ export function createApp(
       },
     }),
   )
+  app.get('/health', (_request, response) => {
+    response.status(200).json({ status: 'ok' })
+  })
+
+  app.get('/ready', async (_request, response) => {
+    try {
+      const readiness = await readinessCheck()
+      assertReadinessReportReady(readiness)
+
+      if (routeProfile === 'production-funding-only') {
+        response.status(200).json({ status: 'ready' })
+        return
+      }
+
+      response.status(200).json({
+        status: 'ready',
+        checkedAt: readiness.checkedAt.toISOString(),
+        latestAvailableMigration: readiness.latestAvailableMigration,
+        latestAppliedMigration: readiness.latestAppliedMigration,
+        pendingMigrations: readiness.pendingMigrations,
+      })
+    } catch (error) {
+      if (routeProfile === 'production-funding-only') {
+        response.status(503).json({ status: 'not_ready' })
+        return
+      }
+
+      response.status(503).json({
+        status: 'not_ready',
+        message:
+          error instanceof Error ? error.message : 'Readiness check failed',
+      })
+    }
+  })
+
+  if (options.fundingAttestationsEnabled) {
+    if (!options.database || !options.serviceAuthCredentials || !options.environment) {
+      throw new Error('Funding attestation HTTP boundary requires database, environment, and service authentication secret')
+    }
+    app.use(createFundingAttestationRouter({ database: options.database,
+      service: services.fundingAttestationService, environment: options.environment,
+      credentials: options.serviceAuthCredentials,
+      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
+        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
+      }) }))
+    app.use(createNinesIssuanceAuthorizationRouter({
+      service: services.ninesIssuanceAuthorizationService,
+      environment: options.environment,
+      credentials: options.serviceAuthCredentials,
+      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
+        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
+      }),
+      ...(options.boundaryClock === undefined ? {} : { clock: options.boundaryClock }),
+    }))
+  }
+
+  if (options.wagerIntakeEnabled) {
+    if (!options.database || !options.backendServiceAuthCredentials) {
+      throw new Error('Wager intake HTTP boundary requires database and backend service authentication credentials')
+    }
+    app.use(createNinesPlaceBetRouter({
+      service: services.bettingIntakeService,
+      database: options.database,
+      environment: options.environment,
+      credentials: options.backendServiceAuthCredentials,
+      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
+        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
+      }),
+      ...(options.boundaryClock === undefined ? {} : { clock: options.boundaryClock }),
+    }))
+  }
+
+  if (options.raceLifecycleEnabled) {
+    if (!options.database || !options.backendServiceAuthCredentials) {
+      throw new Error('Race lifecycle HTTP boundary requires database and backend service authentication credentials')
+    }
+    app.use(createRaceLifecycleRouter({
+      service: new RaceLifecycleProjectionService(options.database),
+      database: options.database,
+      environment: options.environment,
+      credentials: options.backendServiceAuthCredentials,
+      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
+        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
+      }),
+      ...(options.boundaryClock === undefined ? {} : { clock: options.boundaryClock }),
+    }))
+  }
+
+  if (options.raceResultEnabled) {
+    if (!options.database || !options.backendServiceAuthCredentials) {
+      throw new Error('Race result HTTP boundary requires database and backend service authentication credentials')
+    }
+    app.use(createRaceResultRouter({
+      service: services.raceResultSettlementService,
+      database: options.database,
+      environment: options.environment,
+      credentials: options.backendServiceAuthCredentials,
+      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
+        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
+      }),
+      ...(options.boundaryClock === undefined ? {} : { clock: options.boundaryClock }),
+    }))
+  }
+
+  if (options.playerGameplayReadEnabled) {
+    if (!options.database || !options.serviceAuthCredentials) {
+      throw new Error('Player gameplay read boundary requires database and API service authentication credentials')
+    }
+    app.use(createPlayerGameplayRouter({
+      database: options.database,
+      getPlayerBalanceHandler: services.getPlayerBalanceHandler,
+      environment: options.environment,
+      credentials: options.serviceAuthCredentials,
+      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
+        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
+      }),
+      ...(options.boundaryClock === undefined ? {} : { clock: options.boundaryClock }),
+    }))
+  }
+
+  // Production terminates composition here. Future routers added below remain
+  // unavailable until they are deliberately added to the production allowlist.
+  if (routeProfile === 'production-funding-only') {
+    app.use(errorHandler)
+    return app
+  }
+
   app.use((request, response, next) => {
     const authenticatedUserId = request.header('x-nines-authenticated-user-id')
 
@@ -240,40 +442,15 @@ export function createApp(
     next()
   })
 
-  app.get('/health', (_request, response) => {
-    response.status(200).json({ status: 'ok' })
-  })
-
-  app.get('/ready', async (_request, response) => {
-    try {
-      const readiness = await readinessCheck()
-
-      response.status(200).json({
-        status: 'ready',
-        checkedAt: readiness.checkedAt.toISOString(),
-        latestAvailableMigration: readiness.latestAvailableMigration,
-        latestAppliedMigration: readiness.latestAppliedMigration,
-        pendingMigrations: readiness.pendingMigrations,
-      })
-    } catch (error) {
-      response.status(503).json({
-        status: 'not_ready',
-        message:
-          error instanceof Error ? error.message : 'Readiness check failed',
-      })
-    }
-  })
-
   app.use('/accounts', createAccountsRouter(services.accountService))
   app.use(
     createPlayerAccountsRouter({
-      getPlayerAccountSummaryHandler: services.getPlayerAccountSummaryHandler,
+      getPlayerAccountSummaryHandler:
+        services.getPlayerAccountSummaryHandler,
       getPlayerBalanceHandler: services.getPlayerBalanceHandler,
     }),
   )
-  app.use(
-    createAdminReadOnlyRouter(services.adminOpsReadService),
-  )
+  app.use(createAdminReadOnlyRouter(services.adminOpsReadService))
   app.use(
     createAdminAccountsRouter({
       getAdminAccountInspectionHandler:
@@ -353,8 +530,10 @@ export function createApp(
         services.detectSettlementReconciliationHandler,
       getRacePoolHandler: services.getRacePoolHandler,
       getFinancialBetHandler: services.getFinancialBetHandler,
-      listFinancialBetsByRaceHandler: services.listFinancialBetsByRaceHandler,
-      listFinancialBetsByUserHandler: services.listFinancialBetsByUserHandler,
+      listFinancialBetsByRaceHandler:
+        services.listFinancialBetsByRaceHandler,
+      listFinancialBetsByUserHandler:
+        services.listFinancialBetsByUserHandler,
       listCarryoversHandler: services.listCarryoversHandler,
       getLivePoolTotalHandler: services.getLivePoolTotalHandler,
       listSelectionTotalsHandler: services.listSelectionTotalsHandler,
@@ -380,18 +559,6 @@ export function createApp(
         services.retryProviderDepositCreditHandler,
       depositProviderAdapter: services.depositProviderAdapter,
     }))
-  }
-  if (options.fundingAttestationsEnabled) {
-    if (!options.database || !options.serviceAuthHmacSecret || !options.environment) {
-      throw new Error('Funding attestation HTTP boundary requires database, environment, and service authentication secret')
-    }
-    app.use(createFundingAttestationRouter({ database: options.database,
-      service: services.fundingAttestationService, environment: options.environment,
-      hmacSecret: options.serviceAuthHmacSecret,
-      expectedKeyId: options.serviceAuthKeyId ?? 'development-hmac-v1',
-      ...(options.serviceAuthReplayWindowSeconds === undefined ? {} : {
-        replayWindowSeconds: options.serviceAuthReplayWindowSeconds,
-      }) }))
   }
   app.use(
     createWithdrawalRouter(

@@ -38,7 +38,7 @@ import type {
 } from '../dto/bettingDtos.js'
 import type { BettingRepository } from '../repositories/BettingRepository.js'
 
-const canonicalCurrency = 'USDC'
+const canonicalCurrency = 'NINES'
 const createRacePoolCommandType = 'create_race_pool'
 const registerPoolSelectionCommandType = 'register_pool_selection'
 const freezePoolCommandType = 'freeze_pool'
@@ -377,14 +377,59 @@ export class BettingIntakeService {
     )
   }
 
+  /**
+   * Production ingress needs to distinguish a durable idempotent replay from
+   * the first execution without changing the long-standing placeBet result.
+   */
+  async placeBetForAuthenticatedBoundary(
+    command: PlaceBetCommandDto,
+  ): Promise<{ result: PlaceBetResultDto; replayed: boolean }> {
+    return this.withPlacementLock(`${command.userId}:${command.currency}`, async () => {
+      const execution = { replayed: false }
+      const result = await this.placeBetUnlocked(command, execution)
+      return { result, replayed: execution.replayed }
+    })
+  }
+
   private async placeBetUnlocked(
     command: PlaceBetCommandDto,
+    execution?: { replayed: boolean },
   ): Promise<PlaceBetResultDto> {
     this.assertCanonicalCurrency(command.currency)
+    const requestPayload = this.placeBetRequestPayload(command)
+    const prior = await this.idempotencyRepository.getByKey(
+      placeBetCommandType,
+      toIdempotencyKey(command.idempotencyKey),
+    )
+    if (prior) {
+      return this.database.tx(async (transaction) => {
+        const decision = await this.idempotencyService().begin(
+          placeBetCommandType,
+          toIdempotencyKey(command.idempotencyKey),
+          requestPayload,
+          transaction,
+        )
+        if (decision.kind !== 'replay') {
+          throw new AppError({ category: 'conflict', code: 'IDEMPOTENCY_IN_PROGRESS',
+            message: 'An in-flight wager command already exists', retryable: true })
+        }
+        if (execution) execution.replayed = true
+        return this.getPlaceBetResultFromSnapshot(
+          decision.record.responseSnapshot,
+          transaction,
+        )
+      })
+    }
+    const betIdentityAlreadyUsed = await this.bettingRepository.getBetById(command.betId)
+    if (betIdentityAlreadyUsed) {
+      throw new AppError({ category: 'idempotency_conflict', code: 'BET_IDENTITY_CONFLICT',
+        message: 'The bet identity has already been used by another command',
+        details: { betId: command.betId } })
+    }
     const preliminaryRejection = await this.getRuleRejection(command)
 
     if (preliminaryRejection) {
-      return this.recordRejectedBet(command, preliminaryRejection)
+      return this.recordRejectedBet(command, preliminaryRejection, execution)
     }
 
     const playerAccount = await this.provisionPlayerAccount(command)
@@ -393,10 +438,8 @@ export class BettingIntakeService {
     )
 
     if (authorizationRejection) {
-      return this.recordRejectedBet(command, authorizationRejection)
+      return this.recordRejectedBet(command, authorizationRejection, execution)
     }
-
-    const requestPayload = this.placeBetRequestPayload(command)
 
     return this.database.tx(async (transaction) => {
       const idempotencyService = this.idempotencyService()
@@ -408,10 +451,24 @@ export class BettingIntakeService {
       )
 
       if (idempotencyDecision.kind === 'replay') {
+        if (execution) execution.replayed = true
         return this.getPlaceBetResultFromSnapshot(
           idempotencyDecision.record.responseSnapshot,
           transaction,
         )
+      }
+
+      const existingBet = await this.bettingRepository.getBetById(
+        command.betId,
+        transaction,
+      )
+      if (existingBet) {
+        throw new AppError({
+          category: 'idempotency_conflict',
+          code: 'BET_IDENTITY_CONFLICT',
+          message: 'The bet identity has already been used by another command',
+          details: { betId: command.betId },
+        })
       }
 
       const inTransactionRejection = await this.getRuleRejection(
@@ -444,10 +501,18 @@ export class BettingIntakeService {
           },
           transaction,
         )
+        await this.faultInjector.trigger(
+          'place_bet.after_reservation_before_bet_persist',
+          { betId: command.betId, reservationId: reservation.transactionId },
+        )
         const acceptedBet = await this.insertAcceptedBet(
           command,
           reservation.transactionId,
           transaction,
+        )
+        await this.faultInjector.trigger(
+          'place_bet.after_bet_persist_before_commit',
+          { betId: command.betId, reservationId: reservation.transactionId },
         )
 
         await this.persistDomainEvent(
@@ -492,6 +557,10 @@ export class BettingIntakeService {
           requestPayload,
           { betId: acceptedBet.betId },
           transaction,
+        )
+        await this.faultInjector.trigger(
+          'place_bet.after_idempotency_complete_before_commit',
+          { betId: command.betId, reservationId: reservation.transactionId },
         )
 
         return {
@@ -580,9 +649,11 @@ export class BettingIntakeService {
     const appliedCarryovers = await this.bettingRepository.listCarryovers({
       status: 'applied',
       targetRaceId: raceId,
+      currency: canonicalCurrency,
     })
     const pendingCarryovers = await this.bettingRepository.listCarryovers({
       status: 'pending',
+      currency: canonicalCurrency,
     })
     const appliedCarryoverMinor = appliedCarryovers
       .reduce((sum, carryover) => sum + BigInt(carryover.amountMinor), 0n)
@@ -604,7 +675,7 @@ export class BettingIntakeService {
   }
 
   listBetsByRaceId(raceId: string): Promise<FinancialBetDto[]> {
-    return this.bettingRepository.listBetsByRaceId(raceId)
+    return this.bettingRepository.listBetsByRaceId(raceId, canonicalCurrency)
   }
 
   listBetsByUserId(userId: string): Promise<FinancialBetDto[]> {
@@ -616,7 +687,10 @@ export class BettingIntakeService {
     sourceRaceId?: string
     targetRaceId?: string
   }): Promise<SettlementCarryoverDto[]> {
-    return this.bettingRepository.listCarryovers(criteria)
+    return this.bettingRepository.listCarryovers({
+      ...criteria,
+      currency: canonicalCurrency,
+    })
   }
 
   async getLivePoolTotal(raceId: string): Promise<PoolTotalDto> {
@@ -743,7 +817,7 @@ export class BettingIntakeService {
         {
           reconciliationRunId: run.reconciliationRunId,
           raceId: run.raceId,
-          currency: run.currency,
+          currency: canonicalCurrency,
           status: run.status,
           classification: run.classification,
           actionRequired: run.actionRequired,
@@ -778,6 +852,7 @@ export class BettingIntakeService {
   private async recordRejectedBet(
     command: PlaceBetCommandDto,
     rejection: BetRejection,
+    execution?: { replayed: boolean },
   ): Promise<PlaceBetResultDto> {
     const requestPayload = this.placeBetRequestPayload(command)
 
@@ -791,6 +866,7 @@ export class BettingIntakeService {
       )
 
       if (idempotencyDecision.kind === 'replay') {
+        if (execution) execution.replayed = true
         return this.getPlaceBetResultFromSnapshot(
           idempotencyDecision.record.responseSnapshot,
           transaction,
@@ -1096,7 +1172,7 @@ export class BettingIntakeService {
 
   private async requireRacePool(
     raceId: string,
-    currency: 'USDC',
+    currency: 'NINES',
     transaction: DatabaseTransaction,
   ): Promise<RacePoolDto> {
     const pool = await this.bettingRepository.getRacePool(
@@ -1119,7 +1195,7 @@ export class BettingIntakeService {
 
   private async requireRacePoolForUpdate(
     raceId: string,
-    currency: 'USDC',
+    currency: 'NINES',
     transaction: DatabaseTransaction,
   ): Promise<RacePoolDto> {
     const pool = await this.bettingRepository.getRacePoolForUpdate(
@@ -1143,7 +1219,7 @@ export class BettingIntakeService {
   private async requirePoolSelection(
     raceId: string,
     selectionId: string,
-    currency: 'USDC',
+    currency: 'NINES',
     transaction: DatabaseTransaction,
   ): Promise<PoolSelectionDto> {
     const selection = await this.bettingRepository.getPoolSelection(
@@ -1360,7 +1436,7 @@ export class BettingIntakeService {
       throw new AppError({
         category: 'validation_error',
         code: 'UNSUPPORTED_CURRENCY',
-        message: 'USDC is the only supported front-of-house currency',
+        message: 'NINES is the only supported active wagering currency',
         details: { currency, supportedCurrencies: [canonicalCurrency] },
       })
     }

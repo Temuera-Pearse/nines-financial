@@ -8,14 +8,19 @@
     "node": ">=18.18.0"
   },
   "scripts": {
-    "build": "npm run clean && tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json && npm run copy:migrations && npm run verify:built-migrations",
     "clean": "rm -rf dist",
-    "dev": "tsx watch src/server.ts",
+    "dev": "NODE_ENV=development tsx watch src/server.ts",
     "start": "node dist/src/server.js",
+    "copy:migrations": "node scripts/copyMigrations.mjs",
+    "verify:built-migrations": "node scripts/verifyBuiltMigrations.mjs",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "db:migrate": "tsx scripts/migrate.ts",
+    "db:migrate:production": "node dist/scripts/migrate.js",
     "test": "vitest run",
     "test:real-postgres": "vitest run tests/integration/realPostgresProductionDrills.test.ts",
+    "test:i1:typecheck": "tsc -p tsconfig.i1.json --noEmit",
+    "test:i1": "npm run test:i1:typecheck && vitest run tests/integration/coreLoopSoak.realPostgres.test.ts",
     "test:watch": "vitest",
     "verify": "npm run typecheck && npm test && npm run build"
   },

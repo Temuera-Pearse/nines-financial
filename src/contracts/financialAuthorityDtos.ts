@@ -1,11 +1,18 @@
 export type MinorUnitString = string
 
-export type FinancialCurrency = 'USDC'
+/** Currency accepted by every new active wagering command. */
+export type FinancialCurrency = 'NINES'
+
+/** Persisted wagering rows can include legacy USDC history. */
+export type PersistedWageringCurrency = FinancialCurrency | 'USDC'
+
+/** Player accounts remain currency-addressable for legacy rails and history. */
+export type PlayerAccountCurrency = FinancialCurrency | 'USDC'
 
 export interface PlayerAccountSummaryContract {
   playerAccountId: string
   userId: string
-  currency: FinancialCurrency
+  currency: PlayerAccountCurrency
   effectiveStatus: 'active' | 'restricted' | 'suspended' | 'frozen'
   displayBalanceMinor: MinorUnitString
   spendableBalanceMinor: MinorUnitString
@@ -14,7 +21,7 @@ export interface PlayerAccountSummaryContract {
 
 export interface PlayerBalanceContract {
   playerAccountId: string
-  currency: FinancialCurrency
+  currency: PlayerAccountCurrency
   spendableBalanceMinor: MinorUnitString
   lockedBalanceMinor: MinorUnitString
   restrictedBalanceMinor: MinorUnitString
@@ -109,7 +116,7 @@ export interface AppliedCarryoverContract {
   carryoverId: string
   sourceRaceId: string
   targetRaceId: string | null
-  currency: FinancialCurrency
+  currency: PersistedWageringCurrency
   amountMinor: MinorUnitString
   status: 'pending' | 'applied' | 'voided'
   reasonCode: string
@@ -206,7 +213,7 @@ export interface CreateRacePoolCommandContract {
 
 export interface RacePoolContract {
   raceId: string
-  currency: FinancialCurrency
+  currency: PersistedWageringCurrency
   status:
     | 'open'
     | 'frozen'
@@ -235,7 +242,7 @@ export interface RegisterPoolSelectionCommandContract {
 export interface PoolSelectionContract {
   raceId: string
   selectionId: string
-  currency: FinancialCurrency
+  currency: PersistedWageringCurrency
   status: 'active' | 'inactive'
   displayName: string | null
   createdAt: string
@@ -289,7 +296,7 @@ export interface FinancialBetContract {
   raceId: string
   selectionId: string
   stakeMinor: MinorUnitString
-  currency: FinancialCurrency
+  currency: PersistedWageringCurrency
   status: FinancialBetStatusContract
   rejectionCode: string | null
   rejectionReason: string | null
@@ -341,7 +348,7 @@ export interface SettlementReconciliationReportContract {
 
 export interface SettlementManualReviewItemContract {
   raceId: string
-  currency: FinancialCurrency
+  currency: PersistedWageringCurrency
   poolStatus: RacePoolContract['status']
   poolUpdatedAt: string
   settlementRunId: string | null
@@ -362,7 +369,7 @@ export interface SettlementManualReviewItemContract {
 export interface SettlementReconciliationRunSummaryContract {
   reconciliationRunId: string
   raceId: string
-  currency: FinancialCurrency
+  currency: PersistedWageringCurrency
   status: 'completed' | 'failed'
   classification: 'informational' | 'discrepancy' | 'actionable_incident'
   actionRequired: boolean
@@ -380,7 +387,7 @@ export interface SettlementReconciliationRunSummaryContract {
 
 export interface FundingDepositIntentContract {
   userId: string
-  currency: FinancialCurrency
+  currency: 'USDC'
   amountMinor: MinorUnitString
   provider: 'crypto'
   network: string

@@ -129,6 +129,9 @@ import { PostgresOperationsRepository } from '../domains/operations/repositories
 import { OperationsService } from '../domains/operations/services/OperationsService.js'
 import { FundingAttestationRepository } from '../domains/funding-attestations/repositories/FundingAttestationRepository.js'
 import { FundingAttestationService } from '../domains/funding-attestations/services/FundingAttestationService.js'
+import { NinesIssuanceAuthorizationRepository } from '../domains/issuance-authorizations/repositories/NinesIssuanceAuthorizationRepository.js'
+import { NinesIssuanceAuthorizationService } from '../domains/issuance-authorizations/services/NinesIssuanceAuthorizationService.js'
+import { RaceResultSettlementService } from '../domains/race-results/services/RaceResultSettlementService.js'
 
 export interface ApplicationContainer {
   repositories: {
@@ -146,6 +149,7 @@ export interface ApplicationContainer {
     withdrawalRepository: PostgresWithdrawalRepository
     operationsRepository: PostgresOperationsRepository
     fundingAttestationRepository: FundingAttestationRepository
+    ninesIssuanceAuthorizationRepository: NinesIssuanceAuthorizationRepository
     depositProviderAdapter: DepositProviderAdapter
     withdrawalProviderAdapter: WithdrawalProviderAdapter
   }
@@ -160,10 +164,12 @@ export interface ApplicationContainer {
     accountControlService: AccountControlService
     financialCommandService: FinancialCommandService
     bettingIntakeService: BettingIntakeService
+    raceResultSettlementService: RaceResultSettlementService
     depositService: DepositService
     withdrawalService: WithdrawalService
     operationsService: OperationsService
     fundingAttestationService: FundingAttestationService
+    ninesIssuanceAuthorizationService: NinesIssuanceAuthorizationService
     depositProviderAdapter: DepositProviderAdapter
     withdrawalProviderAdapter: WithdrawalProviderAdapter
   }
@@ -257,6 +263,7 @@ export interface BuildApplicationContainerOptions {
   withdrawalProviderAdapter?: WithdrawalProviderAdapter | undefined
   logger?: Logger
   environment?: 'development' | 'test' | 'production'
+  raceResultSettlementLeaseMs?: number
 }
 
 export function buildApplicationContainer(
@@ -306,6 +313,8 @@ export function buildApplicationContainer(
   )
   const operationsRepository = new PostgresOperationsRepository(options.database)
   const fundingAttestationRepository = new FundingAttestationRepository(options.database)
+  const ninesIssuanceAuthorizationRepository = new NinesIssuanceAuthorizationRepository(
+    options.database, options.environment ?? 'test')
   const idempotencyService = new IdempotencyService(
     idempotencyRepository,
     clock,
@@ -433,6 +442,13 @@ export function buildApplicationContainer(
     clock,
     faultInjector,
   )
+  const raceResultSettlementService = new RaceResultSettlementService(
+    options.database,
+    financialCommandService,
+    faultInjector,
+    clock,
+    options.raceResultSettlementLeaseMs,
+  )
   const depositService = new DepositService(
     options.database,
     depositRepository,
@@ -477,6 +493,17 @@ export function buildApplicationContainer(
   const fundingAttestationService = new FundingAttestationService(
     options.database,
     fundingAttestationRepository,
+    playerAccountProvisioningService,
+    accountRepository,
+    postingEngineService,
+    effectiveStatusService,
+    accountActionAuthorizationService,
+    clock,
+    options.environment ?? 'test',
+  )
+  const ninesIssuanceAuthorizationService = new NinesIssuanceAuthorizationService(
+    options.database,
+    ninesIssuanceAuthorizationRepository,
     playerAccountProvisioningService,
     accountRepository,
     postingEngineService,
@@ -634,6 +661,7 @@ export function buildApplicationContainer(
       withdrawalRepository,
       operationsRepository,
       fundingAttestationRepository,
+      ninesIssuanceAuthorizationRepository,
       depositProviderAdapter,
       withdrawalProviderAdapter,
     },
@@ -648,10 +676,12 @@ export function buildApplicationContainer(
       accountControlService,
       financialCommandService,
       bettingIntakeService,
+      raceResultSettlementService,
       depositService,
       withdrawalService,
       operationsService,
       fundingAttestationService,
+      ninesIssuanceAuthorizationService,
       depositProviderAdapter,
       withdrawalProviderAdapter,
     },

@@ -334,7 +334,7 @@ describe('financial admin read-only HTTP routes', () => {
       degradedFlags: [],
     })
     expect(treasury.body).toMatchObject({
-      currency: 'USDC',
+      currency: 'NINES',
       totalPlayerAvailableBalanceMinorUnits: '0',
       totalPlayerReservedBalanceMinorUnits: '0',
       totalPlayerDisplayBalanceMinorUnits: '0',
@@ -373,7 +373,9 @@ describe('financial admin read-only HTTP routes', () => {
 
     expect(withdrawal.status).toBe(201)
 
-    const treasury = await request(harness.app).get('/admin/treasury/summary')
+    const treasury = await request(harness.app).get(
+      '/admin/treasury/summary?currency=USDC',
+    )
     const deposits = await request(harness.app).get('/admin/deposits/pending')
     const withdrawals = await request(harness.app).get('/admin/withdrawals/pending')
     const settlements = await request(harness.app).get('/admin/settlements/recent')

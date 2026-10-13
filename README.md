@@ -39,6 +39,8 @@ truth.
 - tests for ledger and idempotency invariants
 - authenticated API funding-attestation consumption, exact scale-6
   USDC-to-NINES issuance, and a durable Security evidence outbox
+- authenticated Stage 3 issuance-authorization consumption with exact
+  pre-authorized NINES posting and deterministic replay acknowledgement
 
 ## Hard invariants
 
@@ -52,6 +54,11 @@ truth.
 - NINES is a separate scale-6 currency; token purchase debits
   `token_purchase_clearing` and credits the player's NINES `user_available`
   account exactly once
+- all new wagering pools, stakes, settlement payouts, house take, and
+  carryover are NINES-denominated; one NINES represents NZ$1 of internal
+  wagering value and amounts remain integer scale-6 minor units
+- legacy USDC wagering rows remain persisted and readable, but active wagering
+  commands accept only NINES and never combine the two currencies
 - accepted consumption and its ledger posting are atomically and
   bidirectionally coupled by deferred PostgreSQL constraint triggers
 - committed ledger transactions and entries are append-only; corrections use
@@ -67,6 +74,61 @@ rechecks local account controls, and owns conversion and posting under
 `usdc-to-nines-par-v1`. Attestations past `automaticProcessingUntil` become
 `review_required` without ledger movement. The legacy provider lifecycle is
 test/nonproduction-only and cannot run beside this path in production.
+
+The boundary supports HMAC-SHA256 over HTTPS in production. Its primary API
+credential is configured with `NINES_API_AUTH_HMAC_SECRET` and
+`NINES_API_AUTH_KEY_ID`. During rotation,
+`NINES_API_AUTH_HMAC_ADDITIONAL_KEYS` may contain a JSON object mapping each
+additional accepted key ID to its secret. Financial to Security delivery uses
+the independent `NINES_SECURITY_AUTH_HMAC_SECRET` and
+`NINES_SECURITY_AUTH_KEY_ID` pair. `NINES_SERVICE_AUTH_HMAC_SECRET` and
+`NINES_SERVICE_AUTH_KEY_ID` remain development/test compatibility variables
+and are never used as production fallbacks. `NINES_SERVICE_AUTH_MODE=external`
+remains reserved but is not implemented.
+
+`POST /internal/v1/nines-issuance-authorizations` consumes the immutable
+valuation-derived authorization produced by `nines-api`. Financial validates
+the complete contract and exact `NZD cents * 10,000` relationship, then
+atomically records one consumption, debits platform
+`token_purchase_clearing`, credits the player's NINES `user_available`
+account, updates the balance read model, and writes Security outbox evidence.
+An identical replay returns `already_consumed` with the original consumption
+and ledger transaction IDs; conflicting reuse of any economic identity fails
+closed. Migration 020 also prevents the Stage 4 and legacy v1 paths from
+consuming the same funding source.
+
+## First-production HTTP boundary
+
+The deployed server requires an explicit `NODE_ENV`. `npm run dev` supplies
+`NODE_ENV=development` for local convenience, while `npm start` fails closed if
+the environment is missing or invalid.
+
+`NODE_ENV=production` selects the fixed `production-funding-only` route
+profile. That profile mounts only:
+
+- `GET /health`
+- `GET /ready`
+- `POST /internal/v1/funding-attestations`, when the funding integration and
+  its API-specific HMAC credentials are enabled
+- `POST /internal/v1/nines-issuance-authorizations`, under the same explicit
+  integration and credential gate
+
+The public production readiness response is intentionally limited to
+`{"status":"ready"}` or `{"status":"not_ready"}`. Database and migration
+checks still run, pending migrations return `503`, and internal details are not
+returned over HTTP.
+
+The production boundary rejects implicit `HEAD` and `OPTIONS` handling plus
+case, trailing-slash, dot-segment, encoded, and duplicate-slash aliases. Query
+strings do not alter the canonical funding path used by the service signature.
+`npm run build` copies every SQL migration into `dist/src/migrations` and
+verifies the built filename set, file hashes, and compiled server resolution.
+
+All account, player, admin, ledger, betting, settlement, legacy deposit,
+withdrawal, provider-simulation, and system-maintenance routes are mounted only
+by the nonproduction `full-simulation` profile. Production does not mount these
+routers, even if a legacy route flag is supplied. The legacy deposit lifecycle
+is rejected by production configuration.
 
 ## Ownership boundaries
 
@@ -141,7 +203,8 @@ player balances.
     and degraded flags when dependencies are unavailable
 - `GET /admin/treasury/summary`
   - total player available, reserved, and display balances for a currency
-    defaulting to `USDC`
+    defaulting to active wagering currency `NINES`; legacy `USDC` remains
+    queryable explicitly
   - platform clearing balances by account type where available
   - pending deposit and withdrawal counts and minor-unit totals
 - `GET /admin/settlements/recent`
@@ -159,6 +222,86 @@ If a backing read model is unavailable, the endpoint returns zero counts with
 incidents or live production numbers. Unsupported write methods (`POST`, `PUT`,
 `PATCH`, `DELETE`) are intentionally not registered for these contracts.
 
+## Authenticated NINES wager intake (Stage W1)
+
+`POST /internal/v1/wagers/place-bet` is the sole production wager boundary. It
+accepts `NinesPlaceBetCommandV1` only from HMAC-authenticated
+`nines-back-end`, validates a short-lived player assertion bound to the exact
+`playerId`, and delegates to the existing betting intake service. Each HTTP
+attempt uses a unique transport nonce; the immutable economic command retains
+its original idempotency key across retries.
+
+Financial `race_id` is the backend's private `race_id`, which is the economic
+primary key. `race_ref` is carried for public display/correlation only and is
+not used as the ledger identity. For an accepted wager, Financial debits the
+player's NINES available account and credits the same player's NINES reserved
+(displayed as locked) account.
+
+## Authenticated race lifecycle projection (Stage W2)
+
+`POST /internal/v1/race-lifecycle-events` accepts versioned, HMAC-authenticated
+race-open and betting-close evidence from `nines-back-end`. The private backend
+`raceId` remains the Financial economic primary key; `raceRef` is persisted as
+public evidence. Race-open atomically creates the NINES pool, maps every backend
+runner ID directly to a selection ID, freezes the betting window, and snapshots
+the house-take, carryover, allocation, and rounding policy identities. Race-close
+advances the append-only lifecycle sequence and freezes the pool.
+
+Migration 022 makes lifecycle evidence append-only and prevents changes to the
+authoritative window, runner identities, or policy. PostgreSQL serializes pool
+freeze against wager insertion, so a wager either commits with its exact stake
+reservation before closure or is rejected without movement. W2 introduces no
+result, winner, settlement, payout, or carryover execution behavior.
+
+## Authenticated race result and settlement (Stage W3)
+
+`POST /internal/v1/race-results` accepts only the versioned, HMAC-authenticated
+`nines_race_completed.v1` contract from `nines-back-end`. Financial verifies the
+canonical evidence hash, environment, issuer/audience, W2 race and close-event
+linkage, and the winner/finish order against the immutable selection snapshot.
+It persists one append-only authoritative result per NINES race.
+
+Settlement consumes the house-take, carryover, allocation, and rounding policy
+already frozen on the W2 pool; the caller cannot supply or override economic
+policy. The existing exact-minor-unit settlement engine performs stake capture,
+house take, proportional largest-remainder payouts, or no-winner carryover. The
+durable result state machine is `pending` to `running` to `completed`; identical
+delivery replays the original acknowledgement, while changed evidence or a
+second result for the race fails closed. Migration 023 links the completed
+settlement run to its authoritative result and makes both terminal records
+immutable.
+
+## Core-loop integration and soak drill (Stage I1)
+
+The opt-in Stage I1 drill runs the actual backend race repository, lifecycle and
+result outboxes/workers, authenticated HTTP clients, Financial routes, issuance
+consumption, wagering, carryover, settlement, ledger, and balance rebuild paths
+against two fresh PostgreSQL databases. It runs the deterministic 100-race
+scenario twice and can run a configurable 1,000+ race soak with a PostgreSQL
+container restart while durable delivery work is pending.
+
+The target must be an explicitly disposable PostgreSQL instance. Set
+`NINES_I1_ENABLED=1`, `NINES_I1_BACKEND_DISPOSABLE_PG_URL`,
+`NINES_I1_BACKEND_DISPOSABLE_PG_ALLOW_RESET=1`,
+`NINES_FINANCIAL_REAL_PG_URL`, `NINES_FINANCIAL_REAL_PG_ALLOW_RESET=1`, and run
+`npm run test:i1`. Both database names must identify test/disposable databases
+and must be distinct. For the long
+soak also set `NINES_I1_SOAK_ENABLED=1`, `NINES_I1_SOAK_RACES` (at least 1000),
+and `NINES_I1_POSTGRES_CONTAINER`. The harness destructively resets the
+Financial schema and truncates backend race tables; it must never target shared
+or production data.
+
+## Authoritative wager cutoff (Stage I1.1)
+
+For W2-projected pools, an otherwise valid wager is eligible only when the
+Financial service's trusted `Clock` reports a time strictly before the immutable
+`betting_closes_at` value and the pool remains open. Production constructs this
+clock as `SystemClock`; request timestamps and player/client clocks never decide
+wager eligibility. The check is repeated inside the wager transaction after the
+pool row is locked. Equality with, or any time after, the cutoff is rejected even
+if the close lifecycle event is delayed and the projection still says `open`.
+The PostgreSQL lifecycle bet trigger provides a second server-side guard.
+
 ## Startup safety
 
 - service startup requires `DATABASE_URL`
@@ -173,7 +316,8 @@ incidents or live production numbers. Unsupported write methods (`POST`, `PUT`,
 - `npm install`
 - `npm run typecheck`
 - `npm test`
-- `npm run db:migrate`
+- `npm run db:migrate` for source/development execution
+- `npm run db:migrate:production` after `npm run build` for compiled production execution
 - `npm run test:real-postgres`
 
 ## Environment
@@ -182,6 +326,18 @@ incidents or live production numbers. Unsupported write methods (`POST`, `PUT`,
 - `DATABASE_URL` required for readiness checks, runtime startup, and PostgreSQL-backed execution
 - `NINES_FINANCIAL_REAL_PG_URL` optional, enables destructive real PostgreSQL
   drill tests when combined with `NINES_FINANCIAL_REAL_PG_ALLOW_RESET=1`
+- `NINES_BACKEND_RACE_LIFECYCLE_ENABLED` enables the authenticated lifecycle
+  endpoint and uses the same receiver-side backend HMAC key ring as W1
+- `NINES_BACKEND_RACE_RESULT_ENABLED` enables the authenticated authoritative
+  result endpoint and uses the same receiver-side backend HMAC key ring
+- `NINES_RACE_RESULT_RECOVERY_ENABLED` enables startup and periodic autonomous
+  settlement recovery for durably accepted results (defaults to `true`; the
+  worker runs only when authoritative result ingestion is enabled)
+- `NINES_RACE_RESULT_RECOVERY_POLL_INTERVAL_MS`,
+  `NINES_RACE_RESULT_RECOVERY_LEASE_MS`,
+  `NINES_RACE_RESULT_RECOVERY_MAX_ATTEMPTS`, and
+  `NINES_RACE_RESULT_RECOVERY_BATCH_SIZE` bound polling, claim expiry, retries,
+  and startup/periodic batch work
 - `NINES_FINANCIAL_OPERATOR_SHARED_SECRET` optional, requires guarded operator
   endpoints to include `x-nines-operator-secret`
 - `NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET` required in production mode and

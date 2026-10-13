@@ -11,7 +11,7 @@ import {
 import { PostgresDatabase } from '../../src/shared/db/PostgresDatabase.js'
 import type { Database, Queryable } from '../../src/shared/db/Database.js'
 import { runSqlMigrations } from '../../src/shared/db/migrationRunner.js'
-import { FixedClock } from '../../src/shared/time/Clock.js'
+import { FixedClock, type Clock } from '../../src/shared/time/Clock.js'
 import type { FaultInjector } from '../../src/shared/faults/FaultInjector.js'
 import type { Logger } from '../../src/shared/observability/logger.js'
 
@@ -90,9 +90,14 @@ function buildHarnessForDatabase(
   database: Database,
   options: {
     faultInjector?: FaultInjector
+    wagerIntakeEnabled?: boolean
+    raceLifecycleEnabled?: boolean
+    raceResultEnabled?: boolean
+    backendServiceAuthCredentials?: Readonly<Record<string, Readonly<Record<string, string>>>>
+    clock?: Clock
   } = {},
 ): Omit<RealPostgresTestApplicationHarness, 'close'> {
-  const clock = new FixedClock(new Date('2026-04-22T12:00:00.000Z'))
+  const clock = options.clock ?? new FixedClock(new Date('2026-04-22T12:00:00.000Z'))
   const container = buildApplicationContainer({
     database,
     clock,
@@ -104,12 +109,27 @@ function buildHarnessForDatabase(
 
   return {
     app: createApp({ ...container.services, ...container.handlers }, {
+      database,
+      environment: 'test',
+      ...(options.wagerIntakeEnabled === undefined ? {} : {
+        wagerIntakeEnabled: options.wagerIntakeEnabled,
+      }),
+      ...(options.raceLifecycleEnabled === undefined ? {} : {
+        raceLifecycleEnabled: options.raceLifecycleEnabled,
+      }),
+      ...(options.raceResultEnabled === undefined ? {} : {
+        raceResultEnabled: options.raceResultEnabled,
+      }),
+      ...(options.backendServiceAuthCredentials === undefined ? {} : {
+        backendServiceAuthCredentials: options.backendServiceAuthCredentials,
+      }),
+      boundaryClock: () => clock.now(),
       readinessCheck: async () => ({
         checkedAt: clock.now(),
         latestAvailableMigration:
-          '018_legacy_deposit_credit_exactly_once.sql',
+          '025_authoritative_result_recovery.sql',
         latestAppliedMigration:
-          '018_legacy_deposit_credit_exactly_once.sql',
+          '025_authoritative_result_recovery.sql',
         pendingMigrations: [],
       }),
     }),
@@ -135,14 +155,22 @@ function requireRealPostgresUrl(): string {
 
   const parsed = new URL(url)
   const databaseName = parsed.pathname.replace(/^\//, '')
+  const configuredApplicationUrl = process.env.DATABASE_URL?.trim()
 
-  if (
-    !/test|local|dev/i.test(databaseName) &&
-    process.env.NINES_FINANCIAL_REAL_PG_ALLOW_NON_TEST_DB !== '1'
-  ) {
+  if (configuredApplicationUrl && url === configuredApplicationUrl) {
     throw new Error(
-      'Refusing to reset a database whose name does not include test/local/dev. Set NINES_FINANCIAL_REAL_PG_ALLOW_NON_TEST_DB=1 only for a disposable database.',
+      'Refusing to reset DATABASE_URL; configure a separate disposable PostgreSQL database',
     )
+  }
+
+  if (!/(?:test|disposable)/i.test(databaseName)) {
+    throw new Error(
+      'Refusing to reset PostgreSQL: database name must include test or disposable',
+    )
+  }
+
+  if (/(?:^|[_-])(?:dev|development|prod|production)(?:[_-]|$)/i.test(databaseName)) {
+    throw new Error('Refusing to reset a development or production database')
   }
 
   logRealPostgresSetup('requireRealPostgresUrl:complete', {
@@ -172,6 +200,11 @@ export function realPostgresDrillsEnabled(): boolean {
 export async function createRealPostgresTestApplication(
   options: {
     faultInjector?: FaultInjector
+    wagerIntakeEnabled?: boolean
+    raceLifecycleEnabled?: boolean
+    raceResultEnabled?: boolean
+    backendServiceAuthCredentials?: Readonly<Record<string, Readonly<Record<string, string>>>>
+    clock?: Clock
   } = {},
 ): Promise<RealPostgresTestApplicationHarness> {
   return timedSetupStep('createRealPostgresTestApplication', async () => {
@@ -231,7 +264,37 @@ export function createRealPostgresRestartedApplication(
   harness: RealPostgresTestApplicationHarness,
   options: {
     faultInjector?: FaultInjector
+    wagerIntakeEnabled?: boolean
+    raceLifecycleEnabled?: boolean
+    raceResultEnabled?: boolean
+    backendServiceAuthCredentials?: Readonly<Record<string, Readonly<Record<string, string>>>>
+    clock?: Clock
   } = {},
 ): Omit<RealPostgresTestApplicationHarness, 'close'> {
   return buildHarnessForDatabase(harness.database, options)
+}
+
+/**
+ * Reconnects to an already-migrated real-PG test database without resetting it.
+ * This is intentionally separate from createRealPostgresTestApplication so
+ * restart/soak tests cannot accidentally erase the committed state they are
+ * trying to recover.
+ */
+export function reconnectRealPostgresTestApplication(
+  options: {
+    faultInjector?: FaultInjector
+    wagerIntakeEnabled?: boolean
+    raceLifecycleEnabled?: boolean
+    raceResultEnabled?: boolean
+    backendServiceAuthCredentials?: Readonly<Record<string, Readonly<Record<string, string>>>>
+    clock?: Clock
+  } = {},
+): RealPostgresTestApplicationHarness {
+  const database = new PostgresDatabase({
+    connectionString: requireRealPostgresUrl(),
+    max: 30,
+    options: `-c lock_timeout=${setupLockTimeoutMs}ms -c statement_timeout=${setupStatementTimeoutMs}ms`,
+  })
+  const harness = buildHarnessForDatabase(database, options)
+  return { ...harness, close: () => database.close() }
 }

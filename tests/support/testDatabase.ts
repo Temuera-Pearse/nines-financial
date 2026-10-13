@@ -151,10 +151,52 @@ export async function createTestDatabase(): Promise<TestDatabaseHarness> {
       if (fileName === '017_phase_7_token_purchase_attestations.sql') {
         return sql
           .replace(/([a-z_]+) ~ '\^\[0-9a-f\]\{64\}\$'/gu, 'char_length($1) = 64')
+          .replace("event_type TEXT NOT NULL CHECK (event_type = 'financial.nines_issuance_decided.v1')",
+            "event_type TEXT NOT NULL CHECK (event_type IN ('financial.nines_issuance_decided.v1','financial.nines_issuance_consumed.v1'))")
           .replace(/CREATE OR REPLACE FUNCTION protect_funding_attestation_consumption\(\)[\s\S]*$/u, '')
       }
       if (fileName === '018_legacy_deposit_credit_exactly_once.sql') {
         return sql.replace(/DO \$\$[\s\S]*?\$\$;\s*/u, '')
+      }
+      if (fileName === '020_nines_issuance_authorization_consumption.sql') {
+        return sql
+          .replace(/ALTER TABLE security_evidence_outbox DROP CONSTRAINT security_evidence_outbox_event_type_check;\s*ALTER TABLE security_evidence_outbox ADD CONSTRAINT security_evidence_outbox_event_type_check CHECK \([\s\S]*?\);\s*/u, '')
+          .replace(/([a-z_]+) ~ '[^']+'/gu, 'char_length($1) > 0')
+          .replace(/LENGTH\(/gu, 'char_length(')
+          .replace(/\(funding_attestation_id IS NOT NULL\)::INTEGER \+\s*\(issuance_authorization_id IS NOT NULL\)::INTEGER = 1/gu,
+            '(funding_attestation_id IS NOT NULL) <> (issuance_authorization_id IS NOT NULL)')
+          .replace(/CREATE OR REPLACE FUNCTION[\s\S]*?\$\$;\s*/gu, '')
+          .replace(/CREATE (?:CONSTRAINT )?TRIGGER[\s\S]*?;\s*/gu, '')
+      }
+      if (fileName === '021_authenticated_wager_intake_hardening.sql') {
+        return sql
+          // pg-mem incorrectly uses this partial index for queries whose
+          // transaction_type predicate excludes bet_reserve. PostgreSQL runs
+          // the unmodified migration and its index is verified in real-PG.
+          .replace(/CREATE UNIQUE INDEX IF NOT EXISTS ledger_bet_reserve_reference_unique_idx[\s\S]*?;\s*/u, '')
+          .replace(/CREATE OR REPLACE FUNCTION[\s\S]*?\$\$;\s*/gu, '')
+          .replace(/DROP TRIGGER[\s\S]*?;\s*/gu, '')
+          .replace(/CREATE (?:CONSTRAINT )?TRIGGER[\s\S]*?;\s*/gu, '')
+      }
+      if (fileName === '022_authenticated_race_lifecycle_projection.sql') {
+        return sql
+          .replace(/([a-z_]+) ~ '[^']+'/gu, 'char_length($1) > 0')
+          .replace(/CREATE OR REPLACE FUNCTION[\s\S]*?\$\$;\s*/gu, '')
+          .replace(/CREATE (?:CONSTRAINT )?TRIGGER[\s\S]*?;\s*/gu, '')
+      }
+      if (fileName === '023_authenticated_race_result_settlement.sql') {
+        return sql
+          .replace(/([a-z_]+) ~ '[^']+'/gu, 'char_length($1) > 0')
+          .replace(/CREATE OR REPLACE FUNCTION[\s\S]*?\$\$;\s*/gu, '')
+          .replace(/CREATE (?:CONSTRAINT )?TRIGGER[\s\S]*?;\s*/gu, '')
+      }
+      if (fileName === '025_authoritative_result_recovery.sql') {
+        return sql
+          // pg-mem does not retain PostgreSQL's generated name for the inline
+          // status check. Real PostgreSQL replaces both checks as written.
+          .replace(/ALTER TABLE authoritative_race_results\s+DROP CONSTRAINT[\s\S]*?settlement_shape_check;\s*/u, '')
+          .replace(/ALTER TABLE authoritative_race_results\s+ADD CONSTRAINT authoritative_race_results_settlement_status_check[\s\S]*?\n  \);\s*/u, '')
+          .replace(/CREATE OR REPLACE FUNCTION[\s\S]*?\$\$;\s*/gu, '')
       }
       return sql
     },

@@ -72,6 +72,7 @@ export const referenceTypes = [
   'account',
   'deposit',
   'funding_attestation',
+  'issuance_authorization',
   'withdrawal',
   'bet',
   'reservation',

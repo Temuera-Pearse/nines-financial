@@ -19,7 +19,7 @@ async function provisionPlayerAccount(
     {
       idempotencyKey: toIdempotencyKey(`provision-${key}`),
       userId: toUserId(userId),
-      currency: 'USDC',
+      currency: 'NINES',
       correlationId: `corr_provision_${key}`,
       causationId: `cause_provision_${key}`,
     },
@@ -40,7 +40,7 @@ async function fundPlayer(
     accountType: 'deposit_clearing',
     ownerType: 'platform',
     ownerId: toOwnerId(`deposit-source-${userId}`),
-    currency: 'USDC',
+    currency: 'NINES',
     correlationId: `corr_deposit_source_${userId}`,
     causationId: `cause_deposit_source_${userId}`,
     idempotencyKey: toIdempotencyKey(`deposit-source-${userId}`),
@@ -54,7 +54,7 @@ async function fundPlayer(
     debitAccountId: depositSource.accountId,
     creditAccountId: playerAccount.availableAccountId,
     amountMinor,
-    currency: 'USDC',
+    currency: 'NINES',
     correlationId: `corr_fund_${userId}`,
     causationId: `cause_fund_${userId}`,
   })
@@ -72,7 +72,7 @@ function reserveStakeBody(overrides: Record<string, unknown> = {}) {
     raceId: 'race-1',
     selectionId: 'horse-1',
     stakeMinor: '1200',
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -83,7 +83,7 @@ function poolBody(overrides: Record<string, unknown> = {}) {
     correlationId: 'corr_financial_command_pool',
     causationId: 'cause_financial_command_pool',
     raceId: 'race-1',
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -95,7 +95,7 @@ function selectionBody(overrides: Record<string, unknown> = {}) {
     causationId: 'cause_financial_command_selection',
     raceId: 'race-1',
     selectionId: 'horse-1',
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -110,7 +110,7 @@ function placeBetBody(overrides: Record<string, unknown> = {}) {
     raceId: 'race-1',
     selectionId: 'horse-1',
     stakeMinor: '1200',
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -133,7 +133,7 @@ function settleBetBody(overrides: Record<string, unknown> = {}) {
     raceId: 'race-1',
     winningSelectionId: 'horse-1',
     houseTakeBps: 0,
-    currency: 'USDC',
+    currency: 'NINES',
     ...overrides,
   }
 }
@@ -206,7 +206,7 @@ async function freezePool(harness: TestApplicationHarness, raceId = 'race-1') {
       correlationId: `corr_financial_command_freeze_${raceId}`,
       causationId: `cause_financial_command_freeze_${raceId}`,
       raceId,
-      currency: 'USDC',
+      currency: 'NINES',
       reasonCode: 'race_finished',
     })
 }
@@ -306,7 +306,7 @@ describe('financial command HTTP routes', () => {
       .post('/commands/reserve-stake')
       .send(reserveStakeBody())
     const balanceResponse = await request(harness.app)
-      .get('/player/accounts/USDC/balance')
+      .get('/player/accounts/NINES/balance')
       .set('x-nines-authenticated-user-id', 'player-1')
 
     expect(response.status).toBe(201)
@@ -372,7 +372,7 @@ describe('financial command HTTP routes', () => {
         reasonCode: 'bet_cancelled',
       })
     const balanceResponse = await request(harness.app)
-      .get('/player/accounts/player-1/USDC/balance')
+      .get('/player/accounts/player-1/NINES/balance')
 
     expect(release.status).toBe(200)
     expect(release.body.reservationId).toBe(reserve.body.reservationId)
@@ -407,9 +407,9 @@ describe('financial command HTTP routes', () => {
         }),
       )
     const winnerBalanceResponse = await request(harness.app)
-      .get('/player/accounts/player-win/USDC/balance')
+      .get('/player/accounts/player-win/NINES/balance')
     const loserBalanceResponse = await request(harness.app)
-      .get('/player/accounts/player-loss/USDC/balance')
+      .get('/player/accounts/player-loss/NINES/balance')
     const transactionCount = await harness.database.query<{ count: number }>(
       `
         SELECT count(*)::int AS count
@@ -584,7 +584,7 @@ describe('financial command HTTP routes', () => {
       correlationId: 'corr_apply_carryover_target',
       causationId: 'cause_apply_carryover_target',
       targetRaceId: 'race-carryover-target',
-      currency: 'USDC',
+      currency: 'NINES',
     }
 
     const first = await request(harness.app)
@@ -608,7 +608,7 @@ describe('financial command HTTP routes', () => {
     expect(first.status).toBe(200)
     expect(first.body).toMatchObject({
       targetRaceId: 'race-carryover-target',
-      currency: 'USDC',
+      currency: 'NINES',
       totalAppliedMinor: '900',
     })
     expect(first.body.appliedCarryovers).toEqual([
@@ -668,7 +668,7 @@ describe('financial command HTTP routes', () => {
       correlationId: 'corr_apply_late_carryover_target',
       causationId: 'cause_apply_late_carryover_target',
       targetRaceId: 'race-late-carryover-target',
-      currency: 'USDC',
+      currency: 'NINES',
     }
 
     const noOp = await request(harness.app)
@@ -744,7 +744,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_apply_carryover_for_settlement',
         causationId: 'cause_apply_carryover_for_settlement',
         targetRaceId: 'race-carryover-target',
-        currency: 'USDC',
+        currency: 'NINES',
       })
     await placeFundedBet(
       harness,
@@ -853,7 +853,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_apply_loop_carryover',
         causationId: 'cause_apply_loop_carryover',
         targetRaceId: 'race-loop-target',
-        currency: 'USDC',
+        currency: 'NINES',
       })
     await placeFundedBet(
       harness,
@@ -886,10 +886,10 @@ describe('financial command HTTP routes', () => {
         }),
       )
     const winnerBalance = await request(harness.app).get(
-      '/player/accounts/player-loop-target-win/USDC/balance',
+      '/player/accounts/player-loop-target-win/NINES/balance',
     )
     const loserBalance = await request(harness.app).get(
-      '/player/accounts/player-loop-target-loss/USDC/balance',
+      '/player/accounts/player-loop-target-loss/NINES/balance',
     )
     const report = await request(harness.app).get(
       '/races/race-loop-target/settlement-reconciliation',
@@ -998,7 +998,7 @@ describe('financial command HTTP routes', () => {
       correlationId: 'corr_mark_manual_review',
       causationId: 'cause_mark_manual_review',
       raceId: 'race-manual-review',
-      currency: 'USDC',
+      currency: 'NINES',
       operatorId: 'operator-1',
       reasonCode: 'SETTLEMENT_INPUT_DRIFT',
       reasonText: 'detected by reconciliation',
@@ -1031,7 +1031,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_resolve_manual_review',
         causationId: 'cause_resolve_manual_review',
         raceId: 'race-manual-review',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: 'operator-1',
         resolutionCode: 'RETRY_ALLOWED',
       })
@@ -1091,7 +1091,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_mark_without_operator_auth',
         causationId: 'cause_mark_without_operator_auth',
         raceId: 'race-guarded-review',
-        currency: 'USDC',
+        currency: 'NINES',
         reasonCode: 'AUTH_REQUIRED',
       })
 
@@ -1113,7 +1113,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_mark_with_shared_secret',
         causationId: 'cause_mark_with_shared_secret',
         raceId: 'race-shared-secret-review',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: 'operator-secret',
         reasonCode: 'SECRET_REQUIRED',
       }
@@ -1157,7 +1157,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_void_without_manual_review',
         causationId: 'cause_void_without_manual_review',
         raceId: 'race-invalid-remediation',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: 'operator-1',
         reasonCode: 'VOID_REQUESTED',
       })
@@ -1178,7 +1178,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_mark_void_review',
         causationId: 'cause_mark_void_review',
         raceId: 'race-void-review',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: 'operator-1',
         reasonCode: 'UNSUPPORTED_RESULT',
       })
@@ -1191,7 +1191,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_void_review',
         causationId: 'cause_void_review',
         raceId: 'race-void-review',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: 'operator-1',
         reasonCode: 'VOID_CONFIRMED',
       })
@@ -1486,7 +1486,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_apply_carryover_mismatch',
         causationId: 'cause_apply_carryover_mismatch',
         targetRaceId: 'race-carryover-target',
-        currency: 'USDC',
+        currency: 'NINES',
       })
 
     await harness.database.query(
@@ -1582,7 +1582,7 @@ describe('financial command HTTP routes', () => {
     expect(run.status).toBe(201)
     expect(run.body.reconciliationRun).toMatchObject({
       raceId: 'race-carryover-source',
-      currency: 'USDC',
+      currency: 'NINES',
       status: 'completed',
       classification: 'discrepancy',
       actionRequired: true,
@@ -1616,7 +1616,7 @@ describe('financial command HTTP routes', () => {
         correlationId: 'corr_mark_stale_review',
         causationId: 'cause_mark_stale_review',
         raceId: 'race-stale-review',
-        currency: 'USDC',
+        currency: 'NINES',
         operatorId: 'operator-1',
         reasonCode: 'AGING_REVIEW',
       })
@@ -1727,7 +1727,7 @@ describe('financial command HTTP routes', () => {
       .send({
         raceId: 'race-house-take',
         amountMinor: '300',
-        currency: 'USDC',
+        currency: 'NINES',
       })
     const transactionCount = await harness.database.query<{ count: number }>(
       `
@@ -1757,7 +1757,7 @@ describe('financial command HTTP routes', () => {
         causationId: 'cause_bad_house_take',
         raceId: 'race-1',
         amountMinor: '12.00',
-        currency: 'USDC',
+        currency: 'NINES',
       },
     ],
   ])('rejects loose decimal amounts for %s', async (path, body) => {
@@ -1783,7 +1783,7 @@ describe('financial command HTTP routes', () => {
         currency: 'USD',
       },
     ],
-  ])('rejects non-USDC commands for %s', async (path, body) => {
+  ])('rejects non-NINES commands for %s', async (path, body) => {
     harness = await createTestApplication()
 
     const response = await request(harness.app).post(path).send(body)

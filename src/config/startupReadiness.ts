@@ -1,4 +1,6 @@
 import { readdir } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { Database, QueryResultRow } from '../shared/db/Database.js'
 
@@ -15,9 +17,25 @@ export interface StartupReadinessReport {
 
 export interface StartupReadinessPolicyOptions {
   nodeEnv?: string | undefined
+  legacyDepositProviderEnabled?: boolean | undefined
+  withdrawalProviderEnabled?: boolean | undefined
   depositProviderWebhookSecret?: string | undefined
   withdrawalProviderWebhookSecret?: string | undefined
   withdrawalWebhookReplayWindowSeconds?: number | undefined
+}
+
+export function resolveServerMigrationsDirectory(serverModuleUrl: string): string {
+  return path.resolve(path.dirname(fileURLToPath(serverModuleUrl)), './migrations')
+}
+
+export function assertReadinessReportReady(
+  report: StartupReadinessReport,
+): void {
+  if (report.pendingMigrations.length > 0) {
+    throw new Error(
+      `pending migrations detected: ${report.pendingMigrations.join(', ')}`,
+    )
+  }
 }
 
 function assertProviderWebhookPolicy(
@@ -37,13 +55,19 @@ function assertProviderWebhookPolicy(
     return
   }
 
-  if (!options.depositProviderWebhookSecret?.trim()) {
+  if (
+    options.legacyDepositProviderEnabled &&
+    !options.depositProviderWebhookSecret?.trim()
+  ) {
     throw new Error(
       'NINES_DEPOSIT_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',
     )
   }
 
-  if (!options.withdrawalProviderWebhookSecret?.trim()) {
+  if (
+    options.withdrawalProviderEnabled &&
+    !options.withdrawalProviderWebhookSecret?.trim()
+  ) {
     throw new Error(
       'NINES_WITHDRAWAL_PROVIDER_WEBHOOK_SECRET is required when NODE_ENV=production',
     )
@@ -98,9 +122,5 @@ export async function assertStartupReadiness(
     options,
   )
 
-  if (report.pendingMigrations.length > 0) {
-    throw new Error(
-      `pending migrations detected: ${report.pendingMigrations.join(', ')}`,
-    )
-  }
+  assertReadinessReportReady(report)
 }

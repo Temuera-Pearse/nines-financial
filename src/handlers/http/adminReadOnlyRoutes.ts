@@ -10,11 +10,11 @@ function asyncHandler(handler: AsyncRouteHandler): AsyncRouteHandler {
   }
 }
 
-function optionalCurrency(value: unknown): string {
-  if (Array.isArray(value)) return optionalCurrency(value[0])
+function optionalCurrency(value: unknown, fallback: string): string {
+  if (Array.isArray(value)) return optionalCurrency(value[0], fallback)
   return typeof value === 'string' && value.trim()
     ? value.trim().toUpperCase()
-    : 'USDC'
+    : fallback
 }
 
 export function createAdminReadOnlyRouter(
@@ -34,7 +34,7 @@ export function createAdminReadOnlyRouter(
     asyncHandler(async (request, response) => {
       response.status(200).json(
         await adminOpsReadService.getTreasurySummary(
-          optionalCurrency(request.query.currency),
+          optionalCurrency(request.query.currency, 'NINES'),
         ),
       )
     }),
@@ -52,7 +52,7 @@ export function createAdminReadOnlyRouter(
     asyncHandler(async (request, response) => {
       response.status(200).json(
         await adminOpsReadService.getPendingDeposits(
-          optionalCurrency(request.query.currency),
+          optionalCurrency(request.query.currency, 'USDC'),
         ),
       )
     }),
@@ -63,7 +63,7 @@ export function createAdminReadOnlyRouter(
     asyncHandler(async (request, response) => {
       response.status(200).json(
         await adminOpsReadService.getPendingWithdrawals(
-          optionalCurrency(request.query.currency),
+          optionalCurrency(request.query.currency, 'USDC'),
         ),
       )
     }),

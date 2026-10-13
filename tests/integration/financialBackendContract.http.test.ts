@@ -19,7 +19,7 @@ const contractReserveStakeCommand = {
   raceId: 'race-contract-1',
   selectionId: 'horse-1',
   stakeMinor: '1200',
-  currency: 'USDC',
+  currency: 'NINES',
 } as const
 
 const contractPlaceBetCommand = {
@@ -31,7 +31,7 @@ const contractPlaceBetCommand = {
   raceId: 'race-contract-place-1',
   selectionId: 'horse-1',
   stakeMinor: '1200',
-  currency: 'USDC',
+  currency: 'NINES',
 } as const
 
 const contractSettleBetCommand = {
@@ -41,7 +41,7 @@ const contractSettleBetCommand = {
   raceId: 'race-contract-1',
   winningSelectionId: 'horse-1',
   houseTakeBps: 0,
-  currency: 'USDC',
+  currency: 'NINES',
 } as const
 
 const contractApplyHouseTakeCommand = {
@@ -50,7 +50,7 @@ const contractApplyHouseTakeCommand = {
   causationId: 'cause_phase_2_8_apply_house_take',
   raceId: 'race-contract-1',
   amountMinor: '300',
-  currency: 'USDC',
+  currency: 'NINES',
 } as const
 
 function expectOnlyKeys(body: Record<string, unknown>, keys: string[]): void {
@@ -67,7 +67,7 @@ async function provisionAndFundPlayer(
       {
         idempotencyKey: toIdempotencyKey(`phase-2-8-provision-${userId}`),
         userId: toUserId(userId),
-        currency: 'USDC',
+        currency: 'NINES',
         correlationId: 'corr_phase_2_8_provision_player',
         causationId: 'cause_phase_2_8_provision_player',
       },
@@ -77,7 +77,7 @@ async function provisionAndFundPlayer(
       accountType: 'deposit_clearing',
       ownerType: 'platform',
       ownerId: toOwnerId(`phase-2-8-deposit-source-${userId}`),
-      currency: 'USDC',
+      currency: 'NINES',
       correlationId: 'corr_phase_2_8_deposit_source',
       causationId: 'cause_phase_2_8_deposit_source',
       idempotencyKey: toIdempotencyKey(`phase-2-8-deposit-source-${userId}`),
@@ -91,7 +91,7 @@ async function provisionAndFundPlayer(
     debitAccountId: depositSource.accountId,
     creditAccountId: playerAccount.availableAccountId,
     amountMinor,
-    currency: 'USDC',
+    currency: 'NINES',
     correlationId: 'corr_phase_2_8_fund_player',
     causationId: 'cause_phase_2_8_fund_player',
   })
@@ -119,7 +119,7 @@ describe('nines-back-end financial client route contract', () => {
         correlationId: 'corr_phase_3_0_contract_pool',
         causationId: 'cause_phase_3_0_contract_pool',
         raceId: contractPlaceBetCommand.raceId,
-        currency: 'USDC',
+        currency: 'NINES',
       })
     await request(harness.app)
       .post('/commands/register-pool-selection')
@@ -129,7 +129,7 @@ describe('nines-back-end financial client route contract', () => {
         causationId: 'cause_phase_3_0_contract_selection',
         raceId: contractPlaceBetCommand.raceId,
         selectionId: contractPlaceBetCommand.selectionId,
-        currency: 'USDC',
+        currency: 'NINES',
       })
 
     const response = await request(harness.app)
@@ -179,7 +179,7 @@ describe('nines-back-end financial client route contract', () => {
       raceId: contractPlaceBetCommand.raceId,
       selectionId: contractPlaceBetCommand.selectionId,
       stakeMinor: '1200',
-      currency: 'USDC',
+      currency: 'NINES',
       status: 'accepted',
       rejectionCode: null,
       rejectionReason: null,
@@ -281,7 +281,7 @@ describe('nines-back-end financial client route contract', () => {
         correlationId: 'corr_phase_3_1_settlement_pool',
         causationId: 'cause_phase_3_1_settlement_pool',
         raceId: contractSettleBetCommand.raceId,
-        currency: 'USDC',
+        currency: 'NINES',
       })
     await request(harness.app)
       .post('/commands/register-pool-selection')
@@ -291,7 +291,7 @@ describe('nines-back-end financial client route contract', () => {
         causationId: 'cause_phase_3_1_settlement_selection_1',
         raceId: contractSettleBetCommand.raceId,
         selectionId: 'horse-1',
-        currency: 'USDC',
+        currency: 'NINES',
       })
     await request(harness.app)
       .post('/commands/register-pool-selection')
@@ -301,7 +301,7 @@ describe('nines-back-end financial client route contract', () => {
         causationId: 'cause_phase_3_1_settlement_selection_2',
         raceId: contractSettleBetCommand.raceId,
         selectionId: 'horse-2',
-        currency: 'USDC',
+        currency: 'NINES',
       })
     await request(harness.app)
       .post('/commands/place-bet')
@@ -326,7 +326,7 @@ describe('nines-back-end financial client route contract', () => {
         correlationId: 'corr_phase_3_1_settlement_freeze',
         causationId: 'cause_phase_3_1_settlement_freeze',
         raceId: contractSettleBetCommand.raceId,
-        currency: 'USDC',
+        currency: 'NINES',
         reasonCode: 'race_finished',
       })
 
@@ -427,10 +427,10 @@ describe('nines-back-end financial client route contract', () => {
     await provisionAndFundPlayer(harness)
 
     const summaryResponse = await request(harness.app).get(
-      '/player/accounts/player-contract-1/USDC',
+      '/player/accounts/player-contract-1/NINES',
     )
     const balanceResponse = await request(harness.app).get(
-      '/player/accounts/player-contract-1/USDC/balance',
+      '/player/accounts/player-contract-1/NINES/balance',
     )
 
     expect(summaryResponse.status).toBe(200)
@@ -445,7 +445,7 @@ describe('nines-back-end financial client route contract', () => {
     ])
     expect(summaryResponse.body).toMatchObject({
       userId: 'player-contract-1',
-      currency: 'USDC',
+      currency: 'NINES',
       effectiveStatus: 'active',
       displayBalanceMinor: '5000',
       spendableBalanceMinor: '5000',
@@ -462,7 +462,7 @@ describe('nines-back-end financial client route contract', () => {
       'asOf',
     ])
     expect(balanceResponse.body).toMatchObject({
-      currency: 'USDC',
+      currency: 'NINES',
       spendableBalanceMinor: '5000',
       lockedBalanceMinor: '0',
       restrictedBalanceMinor: '0',
@@ -477,7 +477,7 @@ describe('nines-back-end financial client route contract', () => {
       {
         idempotencyKey: toIdempotencyKey('phase-2-8-provision-unfunded'),
         userId: toUserId(contractReserveStakeCommand.userId),
-        currency: 'USDC',
+        currency: 'NINES',
         correlationId: 'corr_phase_2_8_provision_unfunded',
         causationId: 'cause_phase_2_8_provision_unfunded',
       },

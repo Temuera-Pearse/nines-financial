@@ -31,7 +31,7 @@ const commandMetadataSchema = z.object({
   causationId: z.string().trim().min(1),
 })
 
-const canonicalCurrencySchema = z.literal('USDC')
+const canonicalCurrencySchema = z.literal('NINES')
 
 export const reserveStakeCommandSchema = commandMetadataSchema.extend({
   userId: z.string().trim().min(1),
@@ -100,7 +100,7 @@ export type ReleaseReservationCommandDto = z.infer<
 export type ReleaseReservationResultDto = ReleaseReservationResultContract
 
 export type SettleBetCommandDto = z.infer<typeof settleBetCommandSchema> &
-  SettleBetCommandContract
+  SettleBetCommandContract & { authoritativeResultId?: string }
 export type SettleBetResultDto = SettleBetResultContract
 
 export type ApplyHouseTakeCommandDto = z.infer<

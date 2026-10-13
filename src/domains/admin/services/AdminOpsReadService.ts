@@ -120,7 +120,7 @@ export class AdminOpsReadService {
     }
   }
 
-  async getTreasurySummary(currency = 'USDC') {
+  async getTreasurySummary(currency = 'NINES') {
     const degradedFlags: string[] = []
     let balances: TreasuryBalanceRow | undefined
     let platformClearingBalances: Array<{
